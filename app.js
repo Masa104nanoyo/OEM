@@ -34,15 +34,18 @@ const ITEMS = [
 async function api(action, body = {}) {
   showLoading(true);
   try {
+    const params = new URLSearchParams();
+    params.append('payload', JSON.stringify({ action, token: _token, ...body }));
     const res = await fetch(GAS_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, token: _token, ...body }),
+      body: params,
     });
-    const data = await res.json();
+    const text = await res.text();
+    const data = JSON.parse(text);
     if (!data.ok && data.error === 'UNAUTHORIZED') { forceLogout(); return null; }
     return data;
   } catch (e) {
+    console.error(e);
     toast('通信エラーが発生しました', 'error');
     return null;
   } finally {
