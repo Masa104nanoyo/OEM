@@ -35,24 +35,43 @@ const ITEMS = [
 const CATEGORIES = ['生地','裏地','芯地','副資材','下げ札等','その他'];
 const UNITS = ['m','個','枚','本','組','式','yd','kg','g'];
 
-// ===== API（GETパラメータ方式） =====
-async function api(action, body = {}) {
-  showLoading(true);
-  try {
+// ===== API（JSONP方式・CORS完全回避） =====
+function api(action, body = {}) {
+  return new Promise((resolve) => {
+    showLoading(true);
+    const cbName = 'rl_cb_' + Date.now() + '_' + Math.floor(Math.random()*10000);
     const payload = JSON.stringify({ action, token: _token, ...body });
-    const url     = GAS_URL + '?payload=' + encodeURIComponent(payload);
-    const res     = await fetch(url, { method: 'GET' });
-    const text    = await res.text();
-    const data    = JSON.parse(text);
-    if (!data.ok && data.error === 'UNAUTHORIZED') { forceLogout(); return null; }
-    return data;
-  } catch (e) {
-    console.error('API Error:', e);
-    toast('通信エラーが発生しました', 'error');
-    return null;
-  } finally {
-    showLoading(false);
-  }
+    const url = GAS_URL + '?payload=' + encodeURIComponent(payload) + '&callback=' + cbName;
+
+    window[cbName] = (data) => {
+      showLoading(false);
+      delete window[cbName];
+      document.getElementById('jsonp-' + cbName)?.remove();
+      if (!data.ok && data.error === 'UNAUTHORIZED') { forceLogout(); resolve(null); return; }
+      resolve(data);
+    };
+
+    const script = document.createElement('script');
+    script.id  = 'jsonp-' + cbName;
+    script.src = url;
+    script.onerror = () => {
+      showLoading(false);
+      delete window[cbName];
+      script.remove();
+      toast('通信エラーが発生しました', 'error');
+      resolve(null);
+    };
+    setTimeout(() => {
+      if (window[cbName]) {
+        showLoading(false);
+        delete window[cbName];
+        script.remove();
+        toast('通信タイムアウト', 'error');
+        resolve(null);
+      }
+    }, 30000);
+    document.head.appendChild(script);
+  });
 }
 
 // ===== UI Helpers =====
