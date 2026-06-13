@@ -399,20 +399,22 @@ function collectProductForm() {
 async function saveNewProduct() {
   const data = collectProductForm();
   if (!data.brand_product_no && !data.product_name) { toast('品番または品名を入力してください','error'); return; }
-  // 速度改善：画像はBase64をGASに送らず、登録後に別途保存
   const dataNoImg = { ...data };
   ['image_url_1','image_url_2','image_url_3','image_url_4','image_url_5','image_url_6'].forEach(k => {
-    if (dataNoImg[k] && dataNoImg[k].startsWith('data:')) dataNoImg[k] = ''; // Base64は除外
+    if (dataNoImg[k] && dataNoImg[k].startsWith('data:')) dataNoImg[k] = '';
   });
   const res = await api('products.create', dataNoImg);
   if (!res) return;
   if (!res.ok) { toast(res.error||'登録に失敗しました','error'); return; }
   toast('登録しました（'+res.style_code+'）','success');
-  // バグ修正：全画面を閉じてから一覧を再取得
+  // モーダルを閉じてから少し待って一覧を再取得
   document.getElementById('fullscreen-modal').classList.remove('show');
   document.body.style.overflow = '';
   _currentProduct = null;
-  await loadProducts(); // ← 確実に再取得
+  setTimeout(async () => {
+    _productPage = 1;
+    await loadProducts();
+  }, 500);
 }
 async function saveProductData() {
   const data = collectProductForm();
