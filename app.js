@@ -1,14 +1,11 @@
 // ============================================================
-//  app.js  —  Raises Lab OMS Phase 1 v3.1
+//  app.js  —  Raises Lab OMS Phase 1 v3.4
 //  修正内容:
-//  - 製品・資材シート → 全画面表示
-//  - 画像アップロード（ファイル選択 + ドラッグ&ドロップ + Ctrl+V貼り付け）
-//  - 資材シート行を可変（追加・削除ボタン）
-//  - Col.1〜7 → コード（上段）＋カラー名（下段）の2段自由入力に変更
-//  - 製品シートにカラー登録欄を追加（Col.1〜7）
-//  - 仕入先 → 仕入先マスタから選択
-//  - 品番・品名欄を拡張
-//  - ロス・単価をシンプル数字入力
+//  - 加工場マスタ追加（仕入先との発注先/納品先分離）
+//  - カラーマスタ100色初期登録
+//  - サイズ展開をチェックボックス小窓で選択
+//  - 製品カラーをカラーマスタから選択に変更
+//  - 縫製工場を加工場マスタから選択に変更
 // ============================================================
 
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbwKxypPrqzxHtac7V4vGtvdYi11Vd8PfhJTS3PqMztyQbuIIzGWQzgsb_iLyt55NxDh/exec';
@@ -16,7 +13,7 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbwKxypPrqzxHtac7V4vGtvd
 // ===== 状態 =====
 let _token   = localStorage.getItem('rl_token') || null;
 let _user    = JSON.parse(localStorage.getItem('rl_user') || 'null');
-let _masters = { colors: [], sizes: [], suppliers: [], materials: [] };
+let _masters = { colors: [], sizes: [], suppliers: [], materials: [], factories: [] };
 let _currentProduct = null;
 let _currentFsTab   = 'product';
 let _productPage    = 1;
@@ -129,13 +126,14 @@ async function bootApp() {
   document.getElementById('login-screen').classList.remove('show');
   document.getElementById('app').style.display = 'flex';
   document.getElementById('user-disp').textContent = _user?.display_name || _user?.username || '';
-  const [c, s, sup, mat] = await Promise.all([
-    api('colors.list'), api('sizes.list'), api('suppliers.list'), api('materials.list'),
+  const [c, s, sup, mat, fac] = await Promise.all([
+    api('colors.list'), api('sizes.list'), api('suppliers.list'), api('materials.list'), api('factories.list'),
   ]);
   if (c)   _masters.colors    = c.items || [];
   if (s)   _masters.sizes     = s.items || [];
   if (sup) _masters.suppliers = sup.items || [];
   if (mat) _masters.materials = mat.items || [];
+  if (fac) _masters.factories = fac.items || [];
   showPage('products');
 }
 
@@ -297,93 +295,130 @@ function renderProductForm(p) {
   // 取引先マスタ選択肢
   const clientOpts = '<option value="">-- 選択 --</option>' +
     _masters.suppliers.map(s =>
-      '<option value="'+esc(s.supplier_id||'')+'" data-name="'+esc(s.supplier_name||'')+'" '+
-      ((p?.client_id===s.supplier_id)?'selected':'')+'>'+esc(s.supplier_name)+'</option>'
+      '<option value="'+esc(s.supplier_id||'')+'" '+(p?.client_id===s.supplier_id?'selected':'')+'>'+esc(s.supplier_name)+'</option>'
     ).join('');
 
-  // 製品カラー登録（Col.1〜7）
-  const colorRows = _productColors.map((c, i) =>
-    '<div style="display:grid;grid-template-columns:24px 1fr 1fr;gap:5px;align-items:center;margin-bottom:5px">' +
-    '<div style="font-size:11px;font-weight:600;color:var(--c-text2);text-align:center">'+(i+1)+'</div>' +
-    '<input type="text" id="pc-code-'+i+'" value="'+esc(c.code)+'" placeholder="カラーコード" style="font-size:12px;padding:5px 8px">' +
-    '<input type="text" id="pc-name-'+i+'" value="'+esc(c.name)+'" placeholder="カラー名" style="font-size:12px;padding:5px 8px">' +
-    '</div>'
-  ).join('');
+  // 加工場選択肢
+  const factoryOpts = '<option value="">-- 選択 --</option>' +
+    _masters.factories.map(f =>
+      '<option value="'+esc(f.factory_name||'')+'" '+(p?.factory_name===f.factory_name?'selected':'')+'>'+
+      esc(f.factory_name)+(f.process_type?' ('+esc(f.process_type)+')':'')+'</option>'
+    ).join('');
+
+  // 製品カラー（カラーマスタから選択）
+  const colorSelOpts = '<option value="">-- 選択 --</option>' +
+    _masters.colors.map(c =>
+      '<option value="'+esc(c.color_code)+'" data-name="'+esc(c.color_name_ja)+'">'+
+      esc(c.color_code)+' '+esc(c.color_name_ja)+'</option>'
+    ).join('');
+  const colorSelRows = _productColors.map((c, i) => {
+    const opts = colorSelOpts.replace('value="'+esc(c.code)+'"','value="'+esc(c.code)+'" selected');
+    return '<div style="display:grid;grid-template-columns:24px 1fr;gap:5px;align-items:center;margin-bottom:5px">' +
+      '<div style="font-size:11px;font-weight:600;color:var(--c-text2);text-align:center">'+(i+1)+'</div>' +
+      '<select id="pc-sel-'+i+'" onchange="onColorSel('+i+',this)" style="font-size:12px;padding:5px 8px">'+opts+'</select>' +
+      '</div>';
+  }).join('');
 
   return '<div style="display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start">' +
-
-  // ===== 左カラム =====
   '<div>' +
-  '<div class="section-card"><h3>📦 基本情報</h3>' +
-
-  '<div class="form-row form-row-2"><div class="form-group"><label>お客様品番 ★</label><input type="text" id="f-brand-no" value="'+esc(p?.brand_product_no||'')+'" placeholder="例: K1709LJ046EK"></div>' +
-  '<div class="form-group"><label>仮品番</label><input type="text" id="f-temp-no" value="'+esc(p?.temp_product_no||'')+'" placeholder="仮品番"></div></div>' +
-
-  '<div class="form-row form-row-2"><div class="form-group"><label>品名（日本語）</label><input type="text" id="f-name-ja" value="'+esc(p?.product_name||'')+'" placeholder="品名"></div>' +
-  '<div class="form-group"><label>品名（英語）</label><input type="text" id="f-name-en" value="'+esc(p?.product_name_en||'')+'" placeholder="Product Name"></div></div>' +
-
-  '<div class="form-row form-row-2"><div class="form-group"><label>ブランド</label><input type="text" id="f-brand" value="'+esc(p?.brand||'')+'" placeholder="ブランド名"></div>' +
-  '<div class="form-group"><label>取引先 ★</label>' +
-  '<select id="f-client-select" onchange="onClientSelect(this)">' + clientOpts + '</select>' +
-  '<input type="hidden" id="f-client-id" value="'+esc(p?.client_id||'')+'"></div></div>' +
-
+  '<div class="section-card"><h3>\u{1F4E6} \u57FA\u672C\u60C5\u5831</h3>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u304A\u5BA2\u69D8\u54C1\u756A \u2605</label><input type="text" id="f-brand-no" value="'+esc(p?.brand_product_no||'')+'" placeholder="\u4F8B: K1709LJ046EK"></div>' +
+  '<div class="form-group"><label>\u4EEE\u54C1\u756A</label><input type="text" id="f-temp-no" value="'+esc(p?.temp_product_no||'')+'" placeholder="\u4EEE\u54C1\u756A"></div></div>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u54C1\u540D\uFF08\u65E5\u672C\u8A9E\uFF09</label><input type="text" id="f-name-ja" value="'+esc(p?.product_name||'')+'" placeholder="\u54C1\u540D"></div>' +
+  '<div class="form-group"><label>\u54C1\u540D\uFF08\u82F1\u8A9E\uFF09</label><input type="text" id="f-name-en" value="'+esc(p?.product_name_en||'')+'" placeholder="Product Name"></div></div>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u30D6\u30E9\u30F3\u30C9</label><input type="text" id="f-brand" value="'+esc(p?.brand||'')+'" placeholder="\u30D6\u30E9\u30F3\u30C9\u540D"></div>' +
+  '<div class="form-group"><label>\u53D6\u5F15\u5148 \u2605</label><select id="f-client-select" onchange="onClientSelect(this)">'+clientOpts+'</select><input type="hidden" id="f-client-id" value="'+esc(p?.client_id||'')+'"></div></div>' +
   '<div class="form-row form-row-3">' +
-  '<div class="form-group"><label>アイテム</label><select id="f-item-code">'+ITEMS.map(i=>'<option value="'+i.code+'" '+(p?.item_code===i.code?'selected':'')+'>'+i.code+' '+i.name+'</option>').join('')+'</select></div>' +
-  '<div class="form-group"><label>年度</label><select id="f-year">'+['2026','2027','2025'].map(y=>'<option value="'+y.slice(-2)+'" '+(p?.year===y.slice(-2)?'selected':'')+'>'+y+'</option>').join('')+'</select></div>' +
-  '<div class="form-group"><label>シーズン</label><select id="f-season">'+[['AW','秋冬'],['SS','春夏'],['HO','Holiday'],['RE','Resort'],['NS','通年']].map(([v,l])=>'<option value="'+v+'" '+(p?.season===v?'selected':'')+'>'+v+' '+l+'</option>').join('')+'</select></div>' +
+  '<div class="form-group"><label>\u30A2\u30A4\u30C6\u30E0</label><select id="f-item-code">'+ITEMS.map(i=>'<option value="'+i.code+'" '+(p?.item_code===i.code?'selected':'')+'>'+i.code+' '+i.name+'</option>').join('')+'</select></div>' +
+  '<div class="form-group"><label>\u5E74\u5EA6</label><select id="f-year">'+['2026','2027','2025'].map(y=>'<option value="'+y.slice(-2)+'" '+(p?.year===y.slice(-2)?'selected':'')+'>'+y+'</option>').join('')+'</select></div>' +
+  '<div class="form-group"><label>\u30B7\u30FC\u30BA\u30F3</label><select id="f-season">'+[['AW','\u79CB\u51AC'],['SS','\u6625\u590F'],['HO','Holiday'],['RE','Resort'],['NS','\u901A\u5E74']].map(([v,l])=>'<option value="'+v+'" '+(p?.season===v?'selected':'')+'>'+v+' '+l+'</option>').join('')+'</select></div>' +
   '</div>' +
-
-  '<div class="form-row form-row-2"><div class="form-group"><label>サイズ展開</label><input type="text" id="f-size-range" value="'+esc(p?.size_range||'')+'" placeholder="例: S/M/L/XL"></div>' +
-  '<div class="form-group"><label>原産国</label><input type="text" id="f-country" value="'+esc(p?.country_of_origin||'')+'" placeholder="日本、中国、ベトナム 等"></div></div>' +
-
-  '</div></div>' + // section-card 基本情報 閉じ
-
-  '<div class="section-card" style="margin-top:16px"><h3>🏭 生産情報</h3>' +
-  '<div class="form-row form-row-2"><div class="form-group"><label>パタンナー</label><input type="text" id="f-patternmaker" value="'+esc(p?.patternmaker||'')+'" placeholder="パタンナー名"></div>' +
-  '<div class="form-group"><label>パターンNo.</label><input type="text" id="f-pattern-no" value="'+esc(p?.pattern_no||'')+'" placeholder="パターンNo."></div></div>' +
-  '<div class="form-row form-row-2"><div class="form-group"><label>サンプルNo.</label><input type="text" id="f-sample-no" value="'+esc(p?.sample_no||'')+'" placeholder="サンプルNo."></div>' +
-  '<div class="form-group"><label>縫製工場</label><input type="text" id="f-factory" value="'+esc(p?.factory_name||'')+'" placeholder="工場名"></div></div>' +
-  '<div class="form-row form-row-2"><div class="form-group"><label>製品納期</label><input type="date" id="f-delivery" value="'+esc(p?.delivery_date||'')+'"></div>' +
-  '<div class="form-group"><label>ステータス</label><select id="f-status">'+Object.entries(STATUS_LABELS).map(([v,l])=>'<option value="'+v+'" '+(p?.status===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div></div>' +
-  '<div class="form-group"><label>コメント・備考</label><textarea id="f-memo">'+esc(p?.memo||'')+'</textarea></div>' +
-  '</div></div>' + // section-card 生産情報 閉じ / 左カラム閉じ
-
-  // ===== 右カラム =====
+  '<div class="form-group"><label>\u30B5\u30A4\u30BA\u5C55\u958B</label>' +
+  '<div style="display:flex;gap:6px;align-items:center">' +
+  '<input type="text" id="f-size-range" value="'+esc(p?.size_range||'')+'" placeholder="\u30AF\u30EA\u30C3\u30AF\u3057\u3066\u30B5\u30A4\u30BA\u3092\u9078\u629E..." readonly style="cursor:pointer;flex:1" onclick="openSizePopup()">' +
+  '<button class="btn btn-secondary btn-sm" type="button" onclick="openSizePopup()">\u9078\u629E \u{1F4D0}</button>' +
+  '</div></div>' +
+  '<div class="form-group"><label>\u539F\u7523\u56FD</label><input type="text" id="f-country" value="'+esc(p?.country_of_origin||'')+'" placeholder="\u65E5\u672C\u3001\u4E2D\u56FD\u3001\u30D9\u30C8\u30CA\u30E0 \u7B49"></div>' +
+  '</div></div>' +
+  '<div class="section-card" style="margin-top:16px"><h3>\u{1F3ED} \u751F\u7523\u60C5\u5831</h3>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u30D1\u30BF\u30F3\u30CA\u30FC</label><input type="text" id="f-patternmaker" value="'+esc(p?.patternmaker||'')+'" placeholder="\u30D1\u30BF\u30F3\u30CA\u30FC\u540D"></div>' +
+  '<div class="form-group"><label>\u30D1\u30BF\u30FC\u30F3No.</label><input type="text" id="f-pattern-no" value="'+esc(p?.pattern_no||'')+'" placeholder="\u30D1\u30BF\u30FC\u30F3No."></div></div>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u30B5\u30F3\u30D7\u30EBNo.</label><input type="text" id="f-sample-no" value="'+esc(p?.sample_no||'')+'" placeholder="\u30B5\u30F3\u30D7\u30EBNo."></div>' +
+  '<div class="form-group"><label>\u7E2B\u88FD\u5DE5\u5834</label><select id="f-factory">'+factoryOpts+'</select></div></div>' +
+  '<div class="form-row form-row-2"><div class="form-group"><label>\u88FD\u54C1\u7D0D\u671F</label><input type="date" id="f-delivery" value="'+esc(p?.delivery_date||'')+'"></div>' +
+  '<div class="form-group"><label>\u30B9\u30C6\u30FC\u30BF\u30B9</label><select id="f-status">'+Object.entries(STATUS_LABELS).map(([v,l])=>'<option value="'+v+'" '+(p?.status===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div></div>' +
+  '<div class="form-group"><label>\u30B3\u30E1\u30F3\u30C8\u30FB\u5099\u8003</label><textarea id="f-memo">'+esc(p?.memo||'')+'</textarea></div>' +
+  '</div></div>' +
   '<div>' +
-  '<div class="section-card"><h3>📷 写真</h3>' +
-  '<p style="font-size:11px;color:var(--c-text2);margin-bottom:10px">クリック・ドラッグ&ドロップ・Ctrl+Vで追加（最大6枚）</p>' +
+  '<div class="section-card"><h3>\u{1F4F7} \u5199\u771F</h3>' +
+  '<p style="font-size:11px;color:var(--c-text2);margin-bottom:10px">\u30AF\u30EA\u30C3\u30AF\u30FB\u30C9\u30E9\u30C3\u30B0&\u30C9\u30ED\u30C3\u30D7\u30EFCtrl+V\u3067\u8FFD\u52A0\uFF08\u6700\u5927\uFF16\u679A\uFF09</p>' +
   '<div class="image-grid">'+imgSlots+'</div></div>' +
-
-  '<div class="section-card" style="margin-top:14px"><h3>🎨 製品カラー（Col.1〜7）</h3>' +
-  '<div style="display:grid;grid-template-columns:24px 1fr 1fr;gap:5px;margin-bottom:6px">' +
-  '<div></div>' +
-  '<div style="font-size:10px;font-weight:600;color:var(--c-text2)">カラーコード</div>' +
-  '<div style="font-size:10px;font-weight:600;color:var(--c-text2)">カラー名</div></div>' +
-  colorRows +
-  '<p style="font-size:10px;color:var(--c-text3);margin-top:6px">取引先・工場独自のカラーコードを自由登録</p>' +
-  '</div>' +
-  '</div>' + // 右カラム閉じ
-
-  '</div>'; // grid閉じ
+  '<div class="section-card" style="margin-top:14px"><h3>\u{1F3A8} \u88FD\u54C1\u30AB\u30E9\u30FC\uFF08Col.1\uFF5E7\uFF09</h3>' +
+  '<p style="font-size:10px;color:var(--c-text3);margin-bottom:8px">\u30AB\u30E9\u30FC\u30DE\u30B9\u30BF\u304B\u3089\u9078\u629E</p>' +
+  colorSelRows +
+  '</div></div>' +
+  '</div>';
 }
 
 function onClientSelect(sel) {
+  document.getElementById('f-client-id').value = sel.value;
+}
+
+function onColorSel(i, sel) {
   const opt = sel.options[sel.selectedIndex];
-  document.getElementById('f-client-id').value = opt.value;
+  _productColors[i] = { code: opt.value, name: opt.dataset.name || '' };
+}
+
+function openSizePopup() {
+  const current = (document.getElementById('f-size-range')?.value || '').split('/').map(s=>s.trim()).filter(Boolean);
+  const overlay = document.createElement('div');
+  overlay.id = 'size-popup-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9000;display:flex;align-items:center;justify-content:center';
+  const popup = document.createElement('div');
+  popup.style.cssText = 'background:var(--c-surface);border-radius:12px;padding:24px;width:360px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.2)';
+  popup.innerHTML =
+    '<h3 style="font-size:16px;font-weight:700;margin-bottom:16px">\u{1F4D0} \u30B5\u30A4\u30BA\u5C55\u958B\u3092\u9078\u629E</h3>' +
+    '<div id="size-checks" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">' +
+    _masters.sizes.map(s => {
+      const checked = current.includes(s.size_name);
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:6px 8px;border:1px solid var(--c-border);border-radius:6px;'+(checked?'background:var(--c-primary-bg);border-color:var(--c-primary);':'')+'">' +
+        '<input type="checkbox" value="'+esc(s.size_name)+'" '+(checked?'checked':'')+' style="width:14px;height:14px"> '+esc(s.size_name)+'</label>';
+    }).join('') +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+    '<button class="btn btn-secondary" onclick="closeSizePopup()">\u30AD\u30E3\u30F3\u30BB\u30EB</button>' +
+    '<button class="btn btn-primary" onclick="confirmSizePopup()">\u78BA\u5B9A</button>' +
+    '</div>';
+  overlay.appendChild(popup);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if(e.target===overlay) closeSizePopup(); });
+}
+function closeSizePopup() { const el = document.getElementById('size-popup-overlay'); if(el) el.remove(); }
+function confirmSizePopup() {
+  const checks = document.querySelectorAll('#size-checks input[type=checkbox]:checked');
+  const sizeOrder = _masters.sizes.map(s => s.size_name);
+  const selected = Array.from(checks).map(c => c.value).sort((a,b) => sizeOrder.indexOf(a) - sizeOrder.indexOf(b));
+  const field = document.getElementById('f-size-range');
+  if (field) field.value = selected.join(' / ');
+  closeSizePopup();
 }
 
 function collectProductForm() {
   const g = id => document.getElementById(id)?.value || '';
-  // 製品カラー収集
+  // 製品カラー収集（カラーマスタ選択から）
   const colorFields = {};
   for (let i = 0; i < 7; i++) {
-    colorFields['product_color'+(i+1)+'_code'] = document.getElementById('pc-code-'+i)?.value || '';
-    colorFields['product_color'+(i+1)+'_name'] = document.getElementById('pc-name-'+i)?.value || '';
+    const sel = document.getElementById('pc-sel-'+i);
+    const code = sel ? sel.value : (_productColors[i]?.code || '');
+    const opt  = sel ? sel.options[sel.selectedIndex] : null;
+    const name = opt ? (opt.dataset.name || '') : (_productColors[i]?.name || '');
+    colorFields['product_color'+(i+1)+'_code'] = code;
+    colorFields['product_color'+(i+1)+'_name'] = name;
   }
   return {
     brand_product_no: g('f-brand-no'), temp_product_no: g('f-temp-no'),
     product_name: g('f-name-ja'), product_name_en: g('f-name-en'),
-    brand: g('f-brand'), client_id: g('f-client-id').toUpperCase(),
+    brand: g('f-brand'), client_id: g('f-client-id'),
     item_code: g('f-item-code'), item_name: (ITEMS.find(i=>i.code===g('f-item-code'))||{}).name||'',
     year: g('f-year'), season: g('f-season'), size_range: g('f-size-range'),
     country_of_origin: g('f-country'), patternmaker: g('f-patternmaker'),
@@ -399,22 +434,20 @@ function collectProductForm() {
 async function saveNewProduct() {
   const data = collectProductForm();
   if (!data.brand_product_no && !data.product_name) { toast('品番または品名を入力してください','error'); return; }
+  // 速度改善：画像はBase64をGASに送らず、登録後に別途保存
   const dataNoImg = { ...data };
   ['image_url_1','image_url_2','image_url_3','image_url_4','image_url_5','image_url_6'].forEach(k => {
-    if (dataNoImg[k] && dataNoImg[k].startsWith('data:')) dataNoImg[k] = '';
+    if (dataNoImg[k] && dataNoImg[k].startsWith('data:')) dataNoImg[k] = ''; // Base64は除外
   });
   const res = await api('products.create', dataNoImg);
   if (!res) return;
   if (!res.ok) { toast(res.error||'登録に失敗しました','error'); return; }
   toast('登録しました（'+res.style_code+'）','success');
-  // モーダルを閉じてから少し待って一覧を再取得
+  // バグ修正：全画面を閉じてから一覧を再取得
   document.getElementById('fullscreen-modal').classList.remove('show');
   document.body.style.overflow = '';
   _currentProduct = null;
-  setTimeout(async () => {
-    _productPage = 1;
-    await loadProducts();
-  }, 500);
+  await loadProducts(); // ← 確実に再取得
 }
 async function saveProductData() {
   const data = collectProductForm();
@@ -624,10 +657,11 @@ function renderMastersPage(main) {
   main.innerHTML =
     '<div class="page-header"><h1>マスタ管理</h1></div>' +
     '<div style="display:flex;gap:4px;border-bottom:1px solid var(--c-border);margin-bottom:20px">' +
-    '<button class="fs-tab '+ (_masterTab==='supplier'?'active':'') +'" onclick="switchMasterTab(\'supplier\')">🏭 仕入先マスタ</button>' +
-    '<button class="fs-tab '+ (_masterTab==='material'?'active':'') +'" onclick="switchMasterTab(\'material\')">🧵 資材マスタ</button>' +
-    '<button class="fs-tab '+ (_masterTab==='color'?'active':'') +'" onclick="switchMasterTab(\'color\')">🎨 カラーマスタ</button>' +
-    '<button class="fs-tab '+ (_masterTab==='size'?'active':'') +'" onclick="switchMasterTab(\'size\')">📐 サイズマスタ</button>' +
+    '<button class="fs-tab '+(_masterTab==='supplier'?'active':'')+'" onclick="switchMasterTab(\'supplier\')">🏭 仕入先マスタ</button>' +
+    '<button class="fs-tab '+(_masterTab==='factory'?'active':'')+'"  onclick="switchMasterTab(\'factory\')">🏗️ 加工場マスタ</button>' +
+    '<button class="fs-tab '+(_masterTab==='material'?'active':'')+'" onclick="switchMasterTab(\'material\')">🧵 資材マスタ</button>' +
+    '<button class="fs-tab '+(_masterTab==='color'?'active':'')+'"    onclick="switchMasterTab(\'color\')">🎨 カラーマスタ</button>' +
+    '<button class="fs-tab '+(_masterTab==='size'?'active':'')+'"     onclick="switchMasterTab(\'size\')">📐 サイズマスタ</button>' +
     '</div>' +
     '<div id="master-content"></div>';
   switchMasterTab(_masterTab);
@@ -642,9 +676,156 @@ function switchMasterTab(tab) {
   const c = document.getElementById('master-content');
   if (!c) return;
   if (tab === 'supplier') renderSupplierMasterPage(c);
+  if (tab === 'factory')  renderFactoryMasterPage(c);
   if (tab === 'material') renderMaterialMasterPage(c);
   if (tab === 'color')    renderColorMasterPage(c);
   if (tab === 'size')     renderSizeMasterPage(c);
+}
+
+// ---- 加工場マスタ ----
+const PROCESS_TYPES = ['縫製','裁断','プリント','刺繍','染色','整理加工','生地加工','検品','その他'];
+
+function renderFactoryMasterPage(c) {
+  c.innerHTML =
+    '<div class="card">' +
+    '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">' +
+    '<h3 style="font-size:15px;font-weight:700;flex:1">加工場マスタ</h3>' +
+    '<button class="btn btn-primary btn-sm" onclick="openFactoryForm()">＋ 新規登録</button>' +
+    '<label class="btn btn-secondary btn-sm" style="cursor:pointer">📥 CSVインポート<input type="file" accept=".csv" style="display:none" onchange="importFactoryCSV(event)"></label>' +
+    '<button class="btn btn-secondary btn-sm" onclick="exportFactoryCSV()">📤 CSVエクスポート</button>' +
+    '</div>' +
+    '<p style="font-size:12px;color:var(--c-text2);margin-bottom:12px">加工場名,加工種別,メーカー名,発注先（仕入先）,担当者,TEL,メール,住所 の形式でCSVインポートできます</p>' +
+    '<table class="master-table">' +
+    '<thead><tr><th>加工場名</th><th>加工種別</th><th>発注先（仕入先）</th><th>担当者</th><th>TEL</th><th>住所</th><th style="width:80px">操作</th></tr></thead>' +
+    '<tbody>' +
+    (_masters.factories.length === 0 ?
+      '<tr><td colspan="7" style="text-align:center;color:var(--c-text3);padding:30px">加工場が登録されていません</td></tr>' :
+      _masters.factories.map((f,i) =>
+        '<tr>' +
+        '<td><strong>'+esc(f.factory_name)+'</strong>'+(f.maker_name?'<br><span style="font-size:11px;color:var(--c-text2)">メーカー: '+esc(f.maker_name)+'</span>':'')+'</td>' +
+        '<td><span class="badge badge-blue">'+esc(f.process_type||'')+'</span></td>' +
+        '<td>'+esc(f.supplier_name||'（直取引）')+'</td>' +
+        '<td>'+esc(f.contact_name||'')+'</td>' +
+        '<td>'+esc(f.tel||'')+'</td>' +
+        '<td style="font-size:12px">'+esc(f.address||'')+'</td>' +
+        '<td><button class="btn btn-secondary btn-sm" onclick="openFactoryForm('+i+')">編集</button></td>' +
+        '</tr>'
+      ).join('')
+    ) +
+    '</tbody></table></div>' +
+    '<div id="factory-form-area"></div>';
+}
+
+function openFactoryForm(idx) {
+  const f = idx !== undefined ? _masters.factories[idx] : null;
+  const supOpts = '<option value="">（直取引）</option>' +
+    _masters.suppliers.map(s =>
+      '<option value="'+esc(s.supplier_id||'')+'" data-name="'+esc(s.supplier_name||'')+'" '+
+      (f?.supplier_id===s.supplier_id?'selected':'')+'>'+esc(s.supplier_name)+'</option>'
+    ).join('');
+  const area = document.getElementById('factory-form-area');
+  if (!area) return;
+  area.innerHTML =
+    '<div class="card" style="margin-top:16px">' +
+    '<h3 style="font-size:15px;font-weight:700;margin-bottom:16px">'+(f?'加工場を編集':'新規加工場登録')+'</h3>' +
+    '<div class="form-row form-row-3">' +
+    '<div class="form-group"><label>加工場名 ★</label><input type="text" id="fac-name" value="'+esc(f?.factory_name||'')+'" placeholder="加工場名"></div>' +
+    '<div class="form-group"><label>加工種別 ★</label><select id="fac-type">'+PROCESS_TYPES.map(t=>'<option value="'+t+'" '+(f?.process_type===t?'selected':'')+'>'+t+'</option>').join('')+'</select></div>' +
+    '<div class="form-group"><label>メーカー名（仕入先と異なる場合）</label><input type="text" id="fac-maker" value="'+esc(f?.maker_name||'')+'" placeholder="例: YKK"></div>' +
+    '</div>' +
+    '<div class="form-row form-row-2">' +
+    '<div class="form-group"><label>発注先（仕入先）<span style="font-size:10px;color:var(--c-text3)"> ※空白＝直接取引</span></label>' +
+    '<select id="fac-sup" onchange="onFactorySupSelect(this)">'+supOpts+'</select>' +
+    '<input type="hidden" id="fac-sup-id" value="'+esc(f?.supplier_id||'')+'">' +
+    '<input type="hidden" id="fac-sup-name" value="'+esc(f?.supplier_name||'')+'">' +
+    '</div>' +
+    '<div class="form-group"><label>担当者名</label><input type="text" id="fac-contact" value="'+esc(f?.contact_name||'')+'" placeholder="担当者名"></div>' +
+    '</div>' +
+    '<div class="form-row form-row-2">' +
+    '<div class="form-group"><label>TEL</label><input type="text" id="fac-tel" value="'+esc(f?.tel||'')+'" placeholder="TEL"></div>' +
+    '<div class="form-group"><label>FAX</label><input type="text" id="fac-fax" value="'+esc(f?.fax||'')+'" placeholder="FAX"></div>' +
+    '</div>' +
+    '<div class="form-group"><label>メール <span style="font-size:10px;color:var(--c-text3)">※発注書の送付先</span></label><input type="text" id="fac-email" value="'+esc(f?.email||'')+'" placeholder="メールアドレス"></div>' +
+    '<div class="form-group"><label>住所 <span style="font-size:10px;color:var(--c-text3)">※荷物の送り先</span></label><input type="text" id="fac-address" value="'+esc(f?.address||'')+'" placeholder="住所"></div>' +
+    '<div class="form-row form-row-2">' +
+    '<div class="form-group"><label>最小ロット（着）</label><input type="number" id="fac-minlot" value="'+esc(f?.min_lot||'')+'" placeholder="0"></div>' +
+    '<div class="form-group"><label>リードタイム（日）</label><input type="number" id="fac-lead" value="'+esc(f?.lead_time_days||'')+'" placeholder="0"></div>' +
+    '</div>' +
+    '<div class="form-group"><label>備考（得意加工・設備など）</label><textarea id="fac-memo">'+esc(f?.memo||'')+'</textarea></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">' +
+    '<button class="btn btn-secondary" onclick="document.getElementById(\'factory-form-area\').innerHTML=\'\'">キャンセル</button>' +
+    '<button class="btn btn-primary" onclick="saveFactory('+(f?'\''+esc(f.factory_id||'')+'\'':'null')+')">保存する</button>' +
+    '</div></div>';
+  area.scrollIntoView({ behavior:'smooth' });
+}
+
+function onFactorySupSelect(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('fac-sup-id').value   = opt.value;
+  document.getElementById('fac-sup-name').value = opt.dataset.name || '';
+}
+
+async function saveFactory(factory_id) {
+  const g = id => document.getElementById(id)?.value || '';
+  const data = {
+    factory_id:    factory_id || undefined,
+    factory_name:  g('fac-name'),
+    process_type:  g('fac-type'),
+    maker_name:    g('fac-maker'),
+    supplier_id:   g('fac-sup-id'),
+    supplier_name: g('fac-sup-name'),
+    contact_name:  g('fac-contact'),
+    tel:           g('fac-tel'),
+    fax:           g('fac-fax'),
+    email:         g('fac-email'),
+    address:       g('fac-address'),
+    min_lot:       g('fac-minlot'),
+    lead_time_days:g('fac-lead'),
+    memo:          g('fac-memo'),
+  };
+  if (!data.factory_name) { toast('加工場名を入力してください','error'); return; }
+  const res = await api('factories.upsert', data);
+  if (!res||!res.ok) { toast('保存に失敗しました','error'); return; }
+  toast('保存しました','success');
+  const fac = await api('factories.list');
+  if (fac) _masters.factories = fac.items;
+  const cont = document.getElementById('master-content');
+  if (cont) renderFactoryMasterPage(cont);
+}
+
+function exportFactoryCSV() {
+  const rows = [['加工場名','加工種別','メーカー名','発注先（仕入先）','担当者','TEL','FAX','メール','住所','最小ロット','リードタイム','備考']];
+  _masters.factories.forEach(f => rows.push([
+    f.factory_name||'', f.process_type||'', f.maker_name||'', f.supplier_name||'',
+    f.contact_name||'', f.tel||'', f.fax||'', f.email||'', f.address||'',
+    f.min_lot||'', f.lead_time_days||'', f.memo||''
+  ]));
+  const csv  = rows.map(r => r.map(v => '"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob); a.download = '加工場マスタ.csv'; a.click();
+}
+
+async function importFactoryCSV(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const text = await file.text();
+  const rows = text.split('\n').map(r => r.split(',').map(v => v.replace(/^"|"$/g,'').replace(/""/g,'"').trim()));
+  let imported = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i]; if (!row[0]) continue;
+    await api('factories.upsert', {
+      factory_name:row[0]||'', process_type:row[1]||'', maker_name:row[2]||'',
+      supplier_name:row[3]||'', contact_name:row[4]||'', tel:row[5]||'',
+      fax:row[6]||'', email:row[7]||'', address:row[8]||'',
+      min_lot:row[9]||'', lead_time_days:row[10]||'', memo:row[11]||'',
+    });
+    imported++;
+  }
+  toast(imported+'件インポートしました','success');
+  const fac = await api('factories.list');
+  if (fac) _masters.factories = fac.items;
+  const cont = document.getElementById('master-content');
+  if (cont) renderFactoryMasterPage(cont);
 }
 
 // ---- 仕入先マスタ ----
