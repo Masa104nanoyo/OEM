@@ -1,16 +1,17 @@
 // ============================================================
 //  app.js  —  Raises Lab OMS フロントエンド (Phase 1)
+//  ※ GETパラメータ方式でCORS完全回避
 // ============================================================
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwepUX6BdC1jd3kkrn5OVCxJ8eweRhRgYvEb0iXpCA2150zBIcfxUMzhNuuH1atKQ3ZLw/exec'; // ← GASデプロイURL を入れる
+const GAS_URL = ' https://script.google.com/macros/s/AKfycbwKxypPrqzxHtac7V4vGtvdYi11Vd8PfhJTS3PqMztyQbuIIzGWQzgsb_iLyt55NxDh/exec'; // ← GASデプロイURLを入れる
 
 // ===== 状態 =====
-let _token   = localStorage.getItem('rl_token') || null;
-let _user    = JSON.parse(localStorage.getItem('rl_user') || 'null');
+let _token  = localStorage.getItem('rl_token') || null;
+let _user   = JSON.parse(localStorage.getItem('rl_user') || 'null');
 let _masters = { colors: [], sizes: [], suppliers: [], materials: [] };
-let _currentProduct = null;
+let _currentProduct   = null;
 let _currentDrawerTab = 'product';
-let _productPage = 1;
+let _productPage  = 1;
 let _productTotal = 0;
 const PER_PAGE = 24;
 
@@ -25,27 +26,24 @@ const STATUS_LABELS = {
 const SEASONS = ['26AW','26SS','26HO','25AW','25SS','27AW','27SS'];
 const ITEMS = [
   {code:'JK',name:'ジャケット'},{code:'PT',name:'パンツ'},{code:'OP',name:'ワンピース'},
-  {code:'SK',name:'スカート'},{code:'TS',name:'Tシャツ'},{code:'SH',name:'シャツ'},
-  {code:'CT',name:'コート'},{code:'KN',name:'ニット'},{code:'BL',name:'ブルゾン'},
+  {code:'SK',name:'スカート'}, {code:'TS',name:'Tシャツ'},{code:'SH',name:'シャツ'},
+  {code:'CT',name:'コート'},   {code:'KN',name:'ニット'}, {code:'BL',name:'ブルゾン'},
   {code:'CB',name:'カーディガン'},{code:'SW',name:'スウェット'},{code:'OT',name:'その他'},
 ];
 
-// ===== API =====
+// ===== API（GETパラメータ方式・CORS完全回避） =====
 async function api(action, body = {}) {
   showLoading(true);
   try {
-    const params = new URLSearchParams();
-    params.append('payload', JSON.stringify({ action, token: _token, ...body }));
-    const res = await fetch(GAS_URL, {
-      method: 'POST',
-      body: params,
-    });
-    const text = await res.text();
-    const data = JSON.parse(text);
+    const payload = JSON.stringify({ action, token: _token, ...body });
+    const url     = GAS_URL + '?payload=' + encodeURIComponent(payload);
+    const res     = await fetch(url, { method: 'GET' });
+    const text    = await res.text();
+    const data    = JSON.parse(text);
     if (!data.ok && data.error === 'UNAUTHORIZED') { forceLogout(); return null; }
     return data;
   } catch (e) {
-    console.error(e);
+    console.error('API Error:', e);
     toast('通信エラーが発生しました', 'error');
     return null;
   } finally {
@@ -54,11 +52,13 @@ async function api(action, body = {}) {
 }
 
 // ===== UI Helpers =====
-function showLoading(v) { document.getElementById('loading').classList.toggle('show', v); }
+function showLoading(v) {
+  document.getElementById('loading').classList.toggle('show', v);
+}
 
 function toast(msg, type = 'default') {
   const el = document.createElement('div');
-  el.className = `toast ${type}`;
+  el.className = 'toast ' + type;
   el.textContent = msg;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3200);
@@ -66,7 +66,7 @@ function toast(msg, type = 'default') {
 
 function showPage(name) {
   document.querySelectorAll('#topbar nav button').forEach(b => b.classList.remove('active'));
-  const nb = document.getElementById(`nav-${name}`);
+  const nb = document.getElementById('nav-' + name);
   if (nb) nb.classList.add('active');
   const main = document.getElementById('main');
   if (name === 'products') renderProductsPage(main);
@@ -74,14 +74,14 @@ function showPage(name) {
 }
 
 function statusBadge(status) {
-  return `<span class="badge badge-${status}">${STATUS_LABELS[status] || status}</span>`;
+  return '<span class="badge badge-' + status + '">' + (STATUS_LABELS[status] || status) + '</span>';
 }
 
 function nokiCounter(deliveryDate) {
   if (!deliveryDate) return '';
   const days = Math.round((new Date(deliveryDate) - new Date()) / 86400000);
-  const cls = days > 30 ? 'noki-green' : days >= 0 ? 'noki-yellow' : 'noki-red';
-  return `<span class="noki-counter ${cls}">納期 ${days}日</span>`;
+  const cls  = days > 30 ? 'noki-green' : days >= 0 ? 'noki-yellow' : 'noki-red';
+  return '<span class="noki-counter ' + cls + '">納期 ' + days + '日</span>';
 }
 
 // ===== Auth =====
@@ -93,12 +93,10 @@ async function doLogin() {
   errEl.style.display = 'none';
   showLoading(true);
   try {
-    const res = await fetch(GAS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'login', username, password }),
-    });
-    const data = await res.json();
+    const payload = JSON.stringify({ action: 'login', username, password });
+    const url     = GAS_URL + '?payload=' + encodeURIComponent(payload);
+    const res     = await fetch(url, { method: 'GET' });
+    const data    = await res.json();
     if (data.ok) {
       _token = data.token;
       _user  = data.user;
@@ -106,11 +104,12 @@ async function doLogin() {
       localStorage.setItem('rl_user', JSON.stringify(_user));
       bootApp();
     } else {
-      errEl.textContent = data.error || 'ログインに失敗しました';
+      errEl.textContent  = data.error || 'ログインに失敗しました';
       errEl.style.display = 'block';
     }
   } catch (e) {
-    errEl.textContent = '通信エラー';
+    console.error(e);
+    errEl.textContent  = '通信エラー：' + e.message;
     errEl.style.display = 'block';
   } finally {
     showLoading(false);
@@ -136,7 +135,6 @@ async function bootApp() {
   document.getElementById('app').style.display = 'flex';
   document.getElementById('user-disp').textContent = _user?.display_name || _user?.username || '';
 
-  // マスタ一括ロード
   const [c, s, sup, mat] = await Promise.all([
     api('colors.list'),
     api('sizes.list'),
@@ -149,14 +147,9 @@ async function bootApp() {
   if (mat) _masters.materials = mat.items || [];
 
   showPage('products');
-
-  // Enter key on login
-  document.getElementById('l-pass').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doLogin();
-  });
 }
 
-// ===== 品番一覧ページ =====
+// ===== 品番一覧 =====
 let _searchTimer = null;
 
 function renderProductsPage(main) {
@@ -171,11 +164,11 @@ function renderProductsPage(main) {
       <input type="text" id="s-q" placeholder="品番・品名・ブランドで検索..." oninput="triggerSearch()">
       <select id="s-status" onchange="loadProducts()">
         <option value="">全ステータス</option>
-        ${Object.entries(STATUS_LABELS).map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}
+        ${Object.entries(STATUS_LABELS).map(([v,l]) => '<option value="'+v+'">'+l+'</option>').join('')}
       </select>
       <select id="s-season" onchange="loadProducts()">
         <option value="">全シーズン</option>
-        ${SEASONS.map(s => `<option value="${s}">${s}</option>`).join('')}
+        ${SEASONS.map(s => '<option value="'+s+'">'+s+'</option>').join('')}
       </select>
       <button class="btn btn-secondary btn-sm" onclick="clearSearch()">クリア</button>
     </div>
@@ -200,19 +193,14 @@ function clearSearch() {
 }
 
 async function loadProducts() {
-  const search  = document.getElementById('s-q')?.value || '';
-  const status  = document.getElementById('s-status')?.value || '';
-  const season  = document.getElementById('s-season')?.value || '';
-
-  const res = await api('products.list', {
-    search, status, season, page: _productPage, per: PER_PAGE,
-  });
+  const search = document.getElementById('s-q')?.value || '';
+  const status = document.getElementById('s-status')?.value || '';
+  const season = document.getElementById('s-season')?.value || '';
+  const res = await api('products.list', { search, status, season, page: _productPage, per: PER_PAGE });
   if (!res) return;
-
   _productTotal = res.total || 0;
   const area = document.getElementById('product-grid-area');
   if (!area) return;
-
   if (!res.items || res.items.length === 0) {
     area.innerHTML = `
       <div class="empty-state">
@@ -223,25 +211,24 @@ async function loadProducts() {
     document.getElementById('pagination-area').innerHTML = '';
     return;
   }
-
-  area.innerHTML = `<div class="product-grid">${res.items.map(productCard).join('')}</div>`;
+  area.innerHTML = '<div class="product-grid">' + res.items.map(productCard).join('') + '</div>';
   renderPagination(res.total, _productPage, PER_PAGE);
 }
 
 function productCard(p) {
   const imgHtml = p.image_url_1
-    ? `<img src="${p.image_url_1}" alt="" loading="lazy">`
-    : `<div class="no-img">🧥</div>`;
+    ? '<img src="'+p.image_url_1+'" alt="" loading="lazy">'
+    : '<div class="no-img">🧥</div>';
   return `
     <div class="product-card" onclick="openProduct('${p.style_code}')">
       <div class="thumb">${imgHtml}</div>
       <div class="body">
         <div class="style-code">${p.style_code}</div>
         <div class="brand-no">${p.brand_product_no || '（品番未設定）'}</div>
-        <div class="name">${p.product_name || ''} ${p.brand ? '/ ' + p.brand : ''}</div>
+        <div class="name">${p.product_name || ''} ${p.brand ? '/ '+p.brand : ''}</div>
         <div class="meta">
           ${statusBadge(p.status)}
-          <span class="season-tag">${p.year || ''}${p.season || ''}</span>
+          <span class="season-tag">${p.year||''}${p.season||''}</span>
           ${nokiCounter(p.delivery_date)}
         </div>
       </div>
@@ -252,23 +239,23 @@ function renderPagination(total, page, per) {
   const pages = Math.ceil(total / per);
   const area  = document.getElementById('pagination-area');
   if (!area || pages <= 1) { if (area) area.innerHTML = ''; return; }
-  let html = `<div class="pagination">`;
-  html += `<button onclick="goPage(${page-1})" ${page<=1?'disabled':''}>‹</button>`;
+  let html = '<div class="pagination">';
+  html += '<button onclick="goPage('+(page-1)+')" '+(page<=1?'disabled':'')+'>‹</button>';
   for (let i = 1; i <= pages; i++) {
-    if (pages > 7 && Math.abs(i - page) > 2 && i !== 1 && i !== pages) {
-      if (i === 2 || i === pages - 1) html += `<button disabled>…</button>`;
+    if (pages > 7 && Math.abs(i-page) > 2 && i !== 1 && i !== pages) {
+      if (i === 2 || i === pages-1) html += '<button disabled>…</button>';
       continue;
     }
-    html += `<button class="${i===page?'active':''}" onclick="goPage(${i})">${i}</button>`;
+    html += '<button class="'+(i===page?'active':'')+'" onclick="goPage('+i+')">'+i+'</button>';
   }
-  html += `<button onclick="goPage(${page+1})" ${page>=pages?'disabled':''}>›</button>`;
-  html += `</div><div style="text-align:center;font-size:12px;color:var(--c-text3);margin-top:6px">${total}件</div>`;
+  html += '<button onclick="goPage('+(page+1)+')" '+(page>=pages?'disabled':'')+'>›</button>';
+  html += '</div><div style="text-align:center;font-size:12px;color:var(--c-text3);margin-top:6px">'+total+'件</div>';
   area.innerHTML = html;
 }
 
 function goPage(p) { _productPage = p; loadProducts(); }
 
-// ===== ドロワー（詳細/新規） =====
+// ===== ドロワー =====
 function openDrawer(title) {
   document.getElementById('drawer-title').textContent = title;
   document.getElementById('drawer-overlay').classList.add('show');
@@ -295,14 +282,6 @@ function openNewProduct() {
 }
 
 function renderProductForm(p) {
-  const isNew = !p;
-  const colorOptions = _masters.colors.map(c =>
-    `<option value="${c.color_code}">${c.color_code} ${c.color_name_ja}</option>`
-  ).join('');
-  const sizeOptions = _masters.sizes.map(s =>
-    `<option value="${s.size_name}" ${isNew && s.size_name==='M'?'selected':''}>${s.size_name}</option>`
-  ).join('');
-
   return `
   <div class="form-row form-row-2">
     <div class="form-group">
@@ -338,20 +317,20 @@ function renderProductForm(p) {
     <div class="form-group">
       <label>アイテム</label>
       <select id="f-item-code">
-        ${ITEMS.map(i => `<option value="${i.code}" ${p?.item_code===i.code?'selected':''}>${i.code} ${i.name}</option>`).join('')}
+        ${ITEMS.map(i => '<option value="'+i.code+'" '+(p?.item_code===i.code?'selected':'')+'>'+i.code+' '+i.name+'</option>').join('')}
       </select>
     </div>
     <div class="form-group">
       <label>年度</label>
       <select id="f-year">
-        ${['2026','2027','2025'].map(y => `<option value="${y.slice(-2)}" ${p?.year===y.slice(-2)?'selected':''}>${y}</option>`).join('')}
+        ${['2026','2027','2025'].map(y => '<option value="'+y.slice(-2)+'" '+(p?.year===y.slice(-2)?'selected':'')+'>'+y+'</option>').join('')}
       </select>
     </div>
     <div class="form-group">
       <label>シーズン</label>
       <select id="f-season">
         ${[['AW','秋冬'],['SS','春夏'],['HO','Holiday'],['RE','Resort'],['NS','通年']].map(
-          ([v,l]) => `<option value="${v}" ${p?.season===v?'selected':''}>${v} ${l}</option>`
+          ([v,l]) => '<option value="'+v+'" '+(p?.season===v?'selected':'')+'>'+v+' '+l+'</option>'
         ).join('')}
       </select>
     </div>
@@ -394,15 +373,14 @@ function renderProductForm(p) {
     <div class="form-group">
       <label>ステータス</label>
       <select id="f-status">
-        ${Object.entries(STATUS_LABELS).map(([v,l]) => `<option value="${v}" ${p?.status===v?'selected':''}>${l}</option>`).join('')}
+        ${Object.entries(STATUS_LABELS).map(([v,l]) => '<option value="'+v+'" '+(p?.status===v?'selected':'')+'>'+l+'</option>').join('')}
       </select>
     </div>
   </div>
   <div class="form-group">
     <label>コメント・備考</label>
     <textarea id="f-memo">${p?.memo||''}</textarea>
-  </div>
-  `;
+  </div>`;
 }
 
 async function saveNewProduct() {
@@ -413,7 +391,7 @@ async function saveNewProduct() {
   const res = await api('products.create', data);
   if (!res) return;
   if (!res.ok) { toast(res.error || '登録に失敗しました', 'error'); return; }
-  toast(`登録しました（${res.style_code}）`, 'success');
+  toast('登録しました（' + res.style_code + '）', 'success');
   closeDrawer();
   loadProducts();
 }
@@ -428,7 +406,7 @@ function collectProductForm() {
     brand:             g('f-brand'),
     client_id:         g('f-client-id').toUpperCase(),
     item_code:         g('f-item-code'),
-    item_name:         ITEMS.find(i => i.code === g('f-item-code'))?.name || '',
+    item_name:         (ITEMS.find(i => i.code === g('f-item-code')) || {}).name || '',
     year:              g('f-year'),
     season:            g('f-season'),
     size_range:        g('f-size-range'),
@@ -443,7 +421,7 @@ function collectProductForm() {
   };
 }
 
-// ===== 品番詳細（編集） =====
+// ===== 品番詳細 =====
 async function openProduct(style_code) {
   const res = await api('products.get', { style_code });
   if (!res || !res.ok) { toast('取得に失敗しました', 'error'); return; }
@@ -457,12 +435,12 @@ function renderProductDrawer() {
   const p = _currentProduct;
   document.getElementById('drawer-badge').innerHTML = statusBadge(p.status);
   document.getElementById('drawer-tabs').innerHTML = `
-    <button class="drawer-tab active" id="dtab-product"  onclick="switchDrawerTab('product')">製品シート</button>
+    <button class="drawer-tab active" id="dtab-product"   onclick="switchDrawerTab('product')">製品シート</button>
     <button class="drawer-tab"        id="dtab-materials" onclick="switchDrawerTab('materials')">資材シート</button>
   `;
   document.getElementById('drawer-footer').innerHTML = `
     <button class="btn btn-secondary" onclick="closeDrawer()">閉じる</button>
-    <button class="btn btn-primary" id="drawer-save-btn" onclick="saveCurrentTab()">保存する</button>
+    <button class="btn btn-primary"   onclick="saveCurrentTab()">保存する</button>
   `;
   switchDrawerTab('product');
 }
@@ -470,9 +448,8 @@ function renderProductDrawer() {
 function switchDrawerTab(tab) {
   _currentDrawerTab = tab;
   document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
-  const btn = document.getElementById(`dtab-${tab}`);
+  const btn = document.getElementById('dtab-' + tab);
   if (btn) btn.classList.add('active');
-
   if (tab === 'product')   renderProductTabBody();
   if (tab === 'materials') renderMaterialsTab();
 }
@@ -482,15 +459,13 @@ function renderProductTabBody() {
 }
 
 async function saveCurrentTab() {
-  if (_currentDrawerTab === 'product') await saveProductEdit();
+  if (_currentDrawerTab === 'product')   await saveProductEdit();
   if (_currentDrawerTab === 'materials') await saveMaterialsEdit();
 }
 
 async function saveProductEdit() {
   const data = collectProductForm();
-  const res  = await api('products.update', {
-    style_code: _currentProduct.style_code, ...data,
-  });
+  const res  = await api('products.update', { style_code: _currentProduct.style_code, ...data });
   if (!res) return;
   if (!res.ok) { toast(res.error || '保存に失敗しました', 'error'); return; }
   toast('保存しました', 'success');
@@ -500,109 +475,93 @@ async function saveProductEdit() {
 }
 
 // ===== 資材シート =====
-let _materialRows = [];
-
 async function renderMaterialsTab() {
   const res = await api('product_materials.get', { style_code: _currentProduct.style_code });
-  _materialRows = res?.items || [];
-
-  // 21スロット確保
+  const rows = res?.items || [];
   const slots = 'ABCDEFGHIJKLMNOPQRSTU'.split('');
   const map   = {};
-  _materialRows.forEach(r => { map[r.material_slot] = r; });
+  rows.forEach(r => { map[r.material_slot] = r; });
 
-  const colorHeaders = _masters.colors.slice(0, 7).map((c, i) =>
-    `<th title="${c.color_name_ja}">Col.${i+1}<br><span style="font-size:9px">${c.color_code}</span></th>`
+  const colorHeaders = _masters.colors.slice(0,7).map((c,i) =>
+    '<th title="'+c.color_name_ja+'">Col.'+(i+1)+'<br><span style="font-size:9px">'+c.color_code+'</span></th>'
   ).join('');
 
-  const rows = slots.map(slot => {
+  const tableRows = slots.map(slot => {
     const r = map[slot] || { material_slot: slot };
-    const bulkCols = Array.from({length: 7}, (_, i) =>
-      `<td><input type="number" min="0" data-slot="${slot}" data-field="bulk_color${i+1}" value="${r[`bulk_color${i+1}`]||''}" placeholder="0"></td>`
+    const bulkCols = Array.from({length:7}, (_,i) =>
+      '<td><input type="number" min="0" data-slot="'+slot+'" data-field="bulk_color'+(i+1)+'" value="'+(r['bulk_color'+(i+1)]||'')+'" placeholder="0"></td>'
     ).join('');
-    return `
-      <tr data-slot="${slot}">
-        <td class="slot-cell">${slot}</td>
-        <td>
-          <input type="text" data-slot="${slot}" data-field="product_name" value="${r.product_name||''}" placeholder="品名" list="mat-list">
-        </td>
-        <td><input type="text" data-slot="${slot}" data-field="product_no" value="${r.product_no||''}" placeholder="品番"></td>
-        <td><input type="text" data-slot="${slot}" data-field="spec" value="${r.spec||''}" placeholder="規格・サイズ"></td>
-        <td>
-          <select data-slot="${slot}" data-field="category" style="width:80px;font-size:11px">
-            <option value="">-</option>
-            ${['生地','裏地','芯地','副資材','下げ札等','その他'].map(c =>
-              `<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`
-            ).join('')}
-          </select>
-        </td>
-        <td><input type="text" data-slot="${slot}" data-field="usage_location" value="${r.usage_location||''}" placeholder="使用箇所"></td>
-        <td><input type="number" step="0.1" data-slot="${slot}" data-field="usage_quantity" value="${r.usage_quantity||''}" placeholder="0.0"></td>
-        <td>
-          <select data-slot="${slot}" data-field="unit" style="width:56px;font-size:11px">
-            ${['m','個','枚','本','組','式','yd'].map(u =>
-              `<option value="${u}" ${r.unit===u?'selected':''}>${u}</option>`
-            ).join('')}
-          </select>
-        </td>
-        ${bulkCols}
-        <td><input type="number" step="0.1" data-slot="${slot}" data-field="loss_rate" value="${r.loss_rate||''}" placeholder="0"></td>
-        <td><input type="number" step="0.01" data-slot="${slot}" data-field="unit_price" value="${r.unit_price||''}" placeholder="0" oninput="calcUnitPricePerPiece('${slot}')"></td>
-        <td class="price-per-piece-${slot}" style="text-align:right;font-weight:600;font-size:12px">
-          ${r.unit_price && r.usage_quantity ? Math.round(r.unit_price * r.usage_quantity) + '円' : '-'}
-        </td>
-        <td><input type="text" data-slot="${slot}" data-field="maker_name" value="${r.maker_name||''}" placeholder="メーカー"></td>
-        <td><input type="text" data-slot="${slot}" data-field="supplier_name" value="${r.supplier_name||''}" placeholder="仕入先"></td>
-        <td><input type="text" data-slot="${slot}" data-field="memo" value="${r.memo||''}" placeholder="メモ"></td>
-      </tr>`;
+    return `<tr data-slot="${slot}">
+      <td class="slot-cell">${slot}</td>
+      <td><input type="text" data-slot="${slot}" data-field="product_name" value="${r.product_name||''}" placeholder="品名" list="mat-list"></td>
+      <td><input type="text" data-slot="${slot}" data-field="product_no" value="${r.product_no||''}" placeholder="品番"></td>
+      <td><input type="text" data-slot="${slot}" data-field="spec" value="${r.spec||''}" placeholder="規格"></td>
+      <td>
+        <select data-slot="${slot}" data-field="category" style="width:76px;font-size:11px">
+          <option value="">-</option>
+          ${['生地','裏地','芯地','副資材','下げ札等','その他'].map(c =>
+            '<option value="'+c+'" '+(r.category===c?'selected':'')+'>'+c+'</option>'
+          ).join('')}
+        </select>
+      </td>
+      <td><input type="text" data-slot="${slot}" data-field="usage_location" value="${r.usage_location||''}" placeholder="使用箇所"></td>
+      <td><input type="number" step="0.1" data-slot="${slot}" data-field="usage_quantity" value="${r.usage_quantity||''}" placeholder="0.0"></td>
+      <td>
+        <select data-slot="${slot}" data-field="unit" style="width:52px;font-size:11px">
+          ${['m','個','枚','本','組','式','yd'].map(u =>
+            '<option value="'+u+'" '+(r.unit===u?'selected':'')+'>'+u+'</option>'
+          ).join('')}
+        </select>
+      </td>
+      ${bulkCols}
+      <td><input type="number" step="0.1" data-slot="${slot}" data-field="loss_rate" value="${r.loss_rate||''}" placeholder="0"></td>
+      <td><input type="number" step="0.01" data-slot="${slot}" data-field="unit_price" value="${r.unit_price||''}" placeholder="0" oninput="calcUnitPricePerPiece('${slot}')"></td>
+      <td class="price-per-piece-${slot}" style="text-align:right;font-weight:600;font-size:12px">
+        ${r.unit_price && r.usage_quantity ? Math.round(r.unit_price * r.usage_quantity)+'円' : '-'}
+      </td>
+      <td><input type="text" data-slot="${slot}" data-field="supplier_name" value="${r.supplier_name||''}" placeholder="仕入先"></td>
+      <td><input type="text" data-slot="${slot}" data-field="memo" value="${r.memo||''}" placeholder="メモ"></td>
+    </tr>`;
   }).join('');
 
-  // 資材名候補リスト
-  const matList = `<datalist id="mat-list">${_masters.materials.map(m =>
-    `<option value="${m.product_name}">`
-  ).join('')}</datalist>`;
+  const matList = '<datalist id="mat-list">' + _masters.materials.map(m => '<option value="'+m.product_name+'">').join('') + '</datalist>';
 
   document.getElementById('drawer-body').innerHTML = `
     ${matList}
     <p style="font-size:12px;color:var(--c-text2);margin-bottom:10px">
       スタイルコード: <code style="font-family:monospace;background:var(--c-bg);padding:2px 6px;border-radius:4px">${_currentProduct.style_code}</code>
-      — 資材明細を入力してください。BULK発注数はカラー別に入力。着単価は自動計算されます。
     </p>
     <div style="overflow-x:auto">
-    <table class="material-table">
-      <thead>
-        <tr>
+      <table class="material-table">
+        <thead><tr>
           <th>No.</th><th>品名</th><th>品番</th><th>規格</th><th>分類</th>
           <th>使用箇所</th><th>要尺</th><th>単位</th>
           ${colorHeaders}
-          <th>ロス%</th><th>単価</th><th>着単価</th><th>メーカー</th><th>仕入先</th><th>メモ</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
+          <th>ロス%</th><th>単価</th><th>着単価</th><th>仕入先</th><th>メモ</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
     </div>
     <div style="margin-top:14px;padding:12px;background:var(--c-bg);border-radius:var(--radius);font-size:12px">
       <strong>着単価合計（資材）:</strong>
-      <span id="mat-total-price" style="font-size:16px;font-weight:700;margin-left:8px">計算中...</span>
-    </div>
-  `;
+      <span id="mat-total-price" style="font-size:16px;font-weight:700;margin-left:8px">-</span>
+    </div>`;
   calcMatTotals();
 }
 
 function calcUnitPricePerPiece(slot) {
-  const qty   = parseFloat(getSlotField(slot, 'usage_quantity')) || 0;
-  const price = parseFloat(getSlotField(slot, 'unit_price'))    || 0;
-  const cell  = document.querySelector(`.price-per-piece-${slot}`);
-  if (cell) cell.textContent = qty && price ? Math.round(qty * price) + '円' : '-';
+  const qty   = parseFloat(getSlotField(slot,'usage_quantity')) || 0;
+  const price = parseFloat(getSlotField(slot,'unit_price'))    || 0;
+  const cell  = document.querySelector('.price-per-piece-' + slot);
+  if (cell) cell.textContent = qty && price ? Math.round(qty*price)+'円' : '-';
   calcMatTotals();
 }
 
 function calcMatTotals() {
-  const slots = 'ABCDEFGHIJKLMNOPQRSTU'.split('');
   let total = 0;
-  slots.forEach(slot => {
-    const qty   = parseFloat(getSlotField(slot, 'usage_quantity')) || 0;
-    const price = parseFloat(getSlotField(slot, 'unit_price'))    || 0;
+  'ABCDEFGHIJKLMNOPQRSTU'.split('').forEach(slot => {
+    const qty   = parseFloat(getSlotField(slot,'usage_quantity')) || 0;
+    const price = parseFloat(getSlotField(slot,'unit_price'))    || 0;
     total += qty * price;
   });
   const el = document.getElementById('mat-total-price');
@@ -610,32 +569,29 @@ function calcMatTotals() {
 }
 
 function getSlotField(slot, field) {
-  const el = document.querySelector(`[data-slot="${slot}"][data-field="${field}"]`);
+  const el = document.querySelector('[data-slot="'+slot+'"][data-field="'+field+'"]');
   return el ? el.value : '';
 }
 
 async function saveMaterialsEdit() {
   const slots = 'ABCDEFGHIJKLMNOPQRSTU'.split('');
-  const rows  = slots.map(slot => {
-    const fields = ['product_name','product_no','spec','category','usage_location',
-                    'usage_quantity','unit','loss_rate','unit_price','maker_name',
-                    'supplier_name','memo',
-                    'bulk_color1','bulk_color2','bulk_color3','bulk_color4',
-                    'bulk_color5','bulk_color6','bulk_color7'];
+  const fields = ['product_name','product_no','spec','category','usage_location',
+                  'usage_quantity','unit','loss_rate','unit_price','supplier_name','memo',
+                  'bulk_color1','bulk_color2','bulk_color3','bulk_color4',
+                  'bulk_color5','bulk_color6','bulk_color7'];
+  const rows = slots.map(slot => {
     const obj = { material_slot: slot };
     fields.forEach(f => { obj[f] = getSlotField(slot, f); });
     return obj;
-  }).filter(r => r.product_name || r.product_no); // 空行は除外
+  }).filter(r => r.product_name || r.product_no);
 
-  const res = await api('product_materials.save', {
-    style_code: _currentProduct.style_code, rows,
-  });
+  const res = await api('product_materials.save', { style_code: _currentProduct.style_code, rows });
   if (!res) return;
   if (!res.ok) { toast(res.error || '保存に失敗しました', 'error'); return; }
   toast('資材シートを保存しました', 'success');
 }
 
-// ===== マスタ管理ページ =====
+// ===== マスタ管理 =====
 function renderMastersPage(main) {
   main.innerHTML = `
     <div class="page-header"><h1>マスタ管理</h1></div>
@@ -658,8 +614,7 @@ function renderMastersPage(main) {
         <button class="btn btn-secondary btn-sm" onclick="openAddMaterial()">＋ 資材追加</button>
       </div>
       <div id="material-master-body"></div>
-    </div>
-  `;
+    </div>`;
   renderColorMaster();
   renderSizeMaster();
   renderMaterialMaster();
@@ -668,125 +623,83 @@ function renderMastersPage(main) {
 function renderColorMaster() {
   const el = document.getElementById('color-master-body');
   if (!el) return;
-  el.innerHTML = `
-    <table class="master-table">
-      <thead><tr><th>コード</th><th>カラー名</th><th>English</th><th>色見本</th></tr></thead>
-      <tbody>
-        ${_masters.colors.map(c => `
-          <tr>
-            <td><code>${c.color_code}</code></td>
-            <td>${c.color_name_ja}</td>
-            <td>${c.color_name_en}</td>
-            <td><span style="display:inline-block;width:20px;height:20px;border-radius:4px;background:${c.hex||'#ccc'};border:1px solid var(--c-border)"></span></td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`;
+  el.innerHTML = `<table class="master-table">
+    <thead><tr><th>コード</th><th>カラー名</th><th>English</th><th>色見本</th></tr></thead>
+    <tbody>${_masters.colors.map(c => `
+      <tr>
+        <td><code>${c.color_code}</code></td>
+        <td>${c.color_name_ja}</td>
+        <td>${c.color_name_en}</td>
+        <td><span style="display:inline-block;width:20px;height:20px;border-radius:4px;background:${c.hex||'#ccc'};border:1px solid var(--c-border)"></span></td>
+      </tr>`).join('')}
+    </tbody></table>`;
 }
 
 function renderSizeMaster() {
   const el = document.getElementById('size-master-body');
   if (!el) return;
-  el.innerHTML = `
-    <table class="master-table">
-      <thead><tr><th>サイズ名</th><th>グループ</th><th>表示順</th></tr></thead>
-      <tbody>
-        ${_masters.sizes.map(s => `
-          <tr>
-            <td><strong>${s.size_name}</strong></td>
-            <td>${s.size_group}</td>
-            <td>${s.sort_order}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`;
+  el.innerHTML = `<table class="master-table">
+    <thead><tr><th>サイズ名</th><th>グループ</th><th>表示順</th></tr></thead>
+    <tbody>${_masters.sizes.map(s => `
+      <tr><td><strong>${s.size_name}</strong></td><td>${s.size_group}</td><td>${s.sort_order}</td></tr>`).join('')}
+    </tbody></table>`;
 }
 
-function renderMaterialMaster(filter = '') {
+function renderMaterialMaster(filter) {
   const el = document.getElementById('material-master-body');
   if (!el) return;
   const items = filter
-    ? _masters.materials.filter(m =>
-        (m.product_name||'').includes(filter) || (m.product_no||'').includes(filter)
-      )
+    ? _masters.materials.filter(m => (m.product_name||'').includes(filter) || (m.product_no||'').includes(filter))
     : _masters.materials;
-  el.innerHTML = `
-    <table class="master-table">
-      <thead><tr><th>ID</th><th>分類</th><th>品番</th><th>品名</th><th>規格</th><th>単位</th><th>単価</th><th>仕入先</th></tr></thead>
-      <tbody>
-        ${items.map(m => `
-          <tr>
-            <td><code style="font-size:11px">${m.material_id}</code></td>
-            <td>${m.category||''}</td>
-            <td>${m.product_no||''}</td>
-            <td>${m.product_name||''}</td>
-            <td>${m.spec||''}</td>
-            <td>${m.unit||''}</td>
-            <td>${m.unit_price ? Number(m.unit_price).toLocaleString() + '円' : ''}</td>
-            <td>${m.supplier_name||''}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>
-    ${items.length === 0 ? '<p style="text-align:center;color:var(--c-text3);padding:20px">データがありません</p>' : ''}
-  `;
+  el.innerHTML = `<table class="master-table">
+    <thead><tr><th>ID</th><th>分類</th><th>品番</th><th>品名</th><th>規格</th><th>単位</th><th>単価</th><th>仕入先</th></tr></thead>
+    <tbody>${items.map(m => `
+      <tr>
+        <td><code style="font-size:11px">${m.material_id}</code></td>
+        <td>${m.category||''}</td><td>${m.product_no||''}</td><td>${m.product_name||''}</td>
+        <td>${m.spec||''}</td><td>${m.unit||''}</td>
+        <td>${m.unit_price ? Number(m.unit_price).toLocaleString()+'円' : ''}</td>
+        <td>${m.supplier_name||''}</td>
+      </tr>`).join('')}
+    </tbody></table>
+    ${items.length===0 ? '<p style="text-align:center;color:var(--c-text3);padding:20px">データがありません</p>' : ''}`;
 }
 
 function filterMaterials() {
-  const q = document.getElementById('mat-search')?.value || '';
-  renderMaterialMaster(q);
+  renderMaterialMaster(document.getElementById('mat-search')?.value || '');
 }
 
-// ===== マスタ追加（シンプルモーダル） =====
-function openAddColor() {
-  const code = prompt('カラーコード（3文字英大文字 例: BEG）');
-  if (!code) return;
-  const nameJa = prompt('カラー名（日本語 例: ベージュ）');
-  if (!nameJa) return;
-  const nameEn = prompt('Color name (English e.g. Beige)') || '';
+async function openAddColor() {
+  const code   = prompt('カラーコード（3文字英大文字 例: BEG）'); if (!code) return;
+  const nameJa = prompt('カラー名（日本語）'); if (!nameJa) return;
+  const nameEn = prompt('Color name (English)') || '';
   const hex    = prompt('HEXカラーコード（例: #C8B89A）') || '';
-  saveColor(code.toUpperCase(), nameJa, nameEn, hex);
-}
-
-async function saveColor(code, nameJa, nameEn, hex) {
-  const res = await api('colors.upsert', {
-    color_code: code, color_name_ja: nameJa, color_name_en: nameEn,
-    hex, sort_order: _masters.colors.length + 1,
-  });
-  if (!res || !res.ok) { toast('保存に失敗しました', 'error'); return; }
-  toast('カラーを追加しました', 'success');
+  const res = await api('colors.upsert', { color_code: code.toUpperCase(), color_name_ja: nameJa, color_name_en: nameEn, hex, sort_order: _masters.colors.length+1 });
+  if (!res || !res.ok) { toast('保存に失敗しました','error'); return; }
+  toast('カラーを追加しました','success');
   const c = await api('colors.list');
   if (c) { _masters.colors = c.items; renderColorMaster(); }
 }
 
-function openAddSize() {
-  const name = prompt('サイズ名（例: 2XL / 38 / F）');
-  if (!name) return;
-  saveSize(name);
-}
-
-async function saveSize(name) {
-  const res = await api('sizes.upsert', {
-    size_name: name, size_group: 'adult', sort_order: _masters.sizes.length + 1,
-  });
-  if (!res || !res.ok) { toast('保存に失敗しました', 'error'); return; }
-  toast('サイズを追加しました', 'success');
+async function openAddSize() {
+  const name = prompt('サイズ名（例: 2XL / 38 / F）'); if (!name) return;
+  const res = await api('sizes.upsert', { size_name: name, size_group: 'adult', sort_order: _masters.sizes.length+1 });
+  if (!res || !res.ok) { toast('保存に失敗しました','error'); return; }
+  toast('サイズを追加しました','success');
   const s = await api('sizes.list');
   if (s) { _masters.sizes = s.items; renderSizeMaster(); }
 }
 
-function openAddMaterial() {
-  const name = prompt('資材品名');
-  if (!name) return;
-  const no   = prompt('品番（任意）') || '';
-  const cat  = prompt('分類（生地/副資材/下げ札等 等）') || '';
-  const unit = prompt('単位（m/個/枚 等）') || 'm';
+async function openAddMaterial() {
+  const name  = prompt('資材品名'); if (!name) return;
+  const no    = prompt('品番（任意）') || '';
+  const cat   = prompt('分類（生地/副資材/下げ札等）') || '';
+  const unit  = prompt('単位（m/個/枚）') || 'm';
   const price = parseFloat(prompt('単価（円）') || '0');
   const sup   = prompt('仕入先名（任意）') || '';
-  saveMaterial({ product_name: name, product_no: no, category: cat, unit, unit_price: price, supplier_name: sup });
-}
-
-async function saveMaterial(fields) {
-  const res = await api('materials.upsert', fields);
-  if (!res || !res.ok) { toast('保存に失敗しました', 'error'); return; }
-  toast('資材を追加しました', 'success');
+  const res = await api('materials.upsert', { product_name: name, product_no: no, category: cat, unit, unit_price: price, supplier_name: sup });
+  if (!res || !res.ok) { toast('保存に失敗しました','error'); return; }
+  toast('資材を追加しました','success');
   const m = await api('materials.list');
   if (m) { _masters.materials = m.items; renderMaterialMaster(); }
 }
@@ -796,7 +709,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('l-pass').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLogin();
   });
-
   if (_token && _user) {
     bootApp();
   } else {
