@@ -10,11 +10,12 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbxDvxA5269I1es330v6gFAT
 // ===== 状態 =====
 let _token  = localStorage.getItem('rl_token') || null;
 let _user   = JSON.parse(localStorage.getItem('rl_user') || 'null');
-let _masters = { colors:[], sizes:[], suppliers:[], materials:[], factories:[] };
+let _masters = { colors:[], sizes:[], partners:[], materials:[], factories:[], suppliers:[], customers:[] };
 let _currentProduct = null;
 let _currentFsTab   = 'product';
 let _productPage    = 1;
 let _materialRows   = [];
+let _matColorCols   = 3; // デフォルト3列、最大7
 let _productImages  = ['','','','','',''];
 let _productColors  = Array(7).fill(null).map(()=>({code:'',name:''}));
 
@@ -158,9 +159,12 @@ async function bootApp() {
   };
   await tryLoad('colors.list',    'colors');
   await tryLoad('sizes.list',     'sizes');
-  await tryLoad('suppliers.list', 'suppliers');
-  await tryLoad('factories.list', 'factories');
+  await tryLoad('partners.list',  'partners');
+  await tryLoad('customers.list', 'customers');
   await tryLoad('materials.list', 'materials');
+  // 後方互換
+  _masters.suppliers = _masters.partners.filter(p=>p.is_supplier===true||p.is_supplier==='TRUE');
+  _masters.factories  = _masters.partners.filter(p=>p.is_factory===true||p.is_factory==='TRUE');
 
   showPage('products');
 }
@@ -353,7 +357,7 @@ function renderProductForm(p) {
   ).join('');
 
   const supOpts = '<option value="">-- 選択 --</option>'+
-    _masters.suppliers.map(s=>`<option value="${esc(s.supplier_id||'')}" ${p?.client_id===s.supplier_id?'selected':''}>${esc(s.supplier_name)}</option>`).join('');
+    _masters.customers.map(c=>`<option value="${esc(c.customer_id||'')}" ${p?.client_id===c.customer_id?'selected':''}>${esc(c.customer_name)}${c.brand_name?' / '+esc(c.brand_name):''}</option>`).join('');
 
   const facOpts = '<option value="">-- 選択 --</option>'+
     _masters.factories.map(f=>`<option value="${esc(f.factory_name||'')}" ${p?.factory_name===f.factory_name?'selected':''}>${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('');
@@ -668,13 +672,19 @@ async function renderMaterialsTab() {
   if (_materialRows.length===0) {
     for(let i=0;i<10;i++) _materialRows.push({material_slot:String(i+1).padStart(2,'0')});
   }
-  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}">${esc(s.supplier_name)}</option>`).join('');
+  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}">${esc(s.partner_name||s.supplier_name)}</option>`).join('');
+
+  // カラーヘッダー
+  const colorHeaders = Array.from({length:_matColorCols},(_,i)=>
+    `<th style="min-width:110px">Col.${i+1}<br><small>コード/カラー名</small></th>`
+  ).join('');
 
   document.getElementById('fs-body').innerHTML=`
-    <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <code style="background:var(--c-bg);padding:2px 8px;border-radius:4px;font-size:12px">${esc(_currentProduct.style_code)}</code>
       <button class="btn btn-secondary btn-sm" onclick="addMatRow()">＋ 行を追加</button>
-      <button class="btn btn-secondary btn-sm" onclick="openMatMasterPopup('','')">📚 資材マスタに登録</button>
+      <button class="btn btn-secondary btn-sm" onclick="openMatSearchPopup()">🔍 資材マスタから追加</button>
+      ${_matColorCols<7?`<button class="btn btn-secondary btn-sm" onclick="addMatColorCol()">＋ カラー列を追加</button>`:''}
       <div style="margin-left:auto;font-size:13px">着単価合計: <strong id="mat-total" style="font-size:16px;color:var(--c-primary)">-</strong></div>
     </div>
     <datalist id="mat-names">${_masters.materials.map(m=>`<option value="${esc(m.product_name)}">`).join('')}</datalist>
@@ -682,25 +692,20 @@ async function renderMaterialsTab() {
     <table class="material-table" id="mat-table">
       <thead><tr>
         <th style="width:32px">No.</th>
+        <th style="min-width:100px">品番</th>
         <th style="min-width:160px">品名</th>
-        <th style="min-width:120px">品番</th>
         <th style="min-width:90px">規格</th>
         <th style="width:80px">分類</th>
-        <th style="min-width:90px">使用箇所</th>
-        <th style="width:60px">要尺</th>
+        <th style="min-width:120px">使用箇所</th>
+        <th style="width:60px">用尺</th>
         <th style="width:50px">単位</th>
-        <th style="min-width:120px">Col.1<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.2<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.3<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.4<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.5<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.6<br><small>コード/カラー名</small></th>
-        <th style="min-width:120px">Col.7<br><small>コード/カラー名</small></th>
+        ${colorHeaders}
         <th style="width:55px">ロス%</th>
         <th style="width:70px">単価</th>
         <th style="width:70px">着単価</th>
         <th style="min-width:110px">仕入先</th>
-        <th style="min-width:100px">メモ</th>
+        <th style="min-width:90px">メーカー</th>
+        <th style="min-width:90px">メモ</th>
         <th style="width:28px"></th>
       </tr></thead>
       <tbody id="mat-tbody"></tbody>
@@ -711,6 +716,12 @@ async function renderMaterialsTab() {
   calcMatTotal();
 }
 
+function addMatColorCol() {
+  if(_matColorCols>=7) return;
+  _matColorCols++;
+  renderMaterialsTab();
+}
+
 function colCell(r, idx, n) {
   return `<td style="padding:3px 4px;min-width:110px">
     <input type="text" data-r="${idx}" data-f="color${n}_code" value="${esc(r['color'+n+'_code']||'')}" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px">
@@ -719,30 +730,38 @@ function colCell(r, idx, n) {
 }
 
 function appendMatRow(tbody, r, idx, supOpts) {
-  if (!supOpts) supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}" ${r.supplier_name===s.supplier_name?'selected':''}>${esc(s.supplier_name)}</option>`).join('');
+  const sName = s => s.partner_name||s.supplier_name||'';
+  if (!supOpts) supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sName(s))}" ${r.supplier_name===sName(s)?'selected':''}>${esc(sName(s))}</option>`).join('');
+
+  const colorCells = Array.from({length:_matColorCols},(_,n)=>`<td style="padding:3px 4px;min-width:100px">
+    <input type="text" data-r="${idx}" data-f="color${n+1}_code" value="${esc(r['color'+(n+1)+'_code']||'')}" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px">
+    <input type="text" data-r="${idx}" data-f="color${n+1}_name" value="${esc(r['color'+(n+1)+'_name']||'')}" placeholder="カラー名" style="font-size:11px;border-radius:0 0 4px 4px">
+  </td>`).join('');
+
   const tr=document.createElement('tr');
   tr.dataset.idx=idx;
   tr.innerHTML=`
     <td class="slot-cell">${idx+1}</td>
-    <td><input type="text" data-r="${idx}" data-f="product_name" value="${esc(r.product_name||'')}" placeholder="品名" list="mat-names" style="min-width:140px"></td>
-    <td><input type="text" data-r="${idx}" data-f="product_no" value="${esc(r.product_no||'')}" placeholder="品番" style="min-width:100px"></td>
-    <td><input type="text" data-r="${idx}" data-f="spec" value="${esc(r.spec||'')}" placeholder="規格"></td>
+    <td><input type="text" data-r="${idx}" data-f="product_no"       value="${esc(r.product_no||'')}"       placeholder="品番" style="min-width:90px"></td>
+    <td><input type="text" data-r="${idx}" data-f="product_name"     value="${esc(r.product_name||'')}"     placeholder="品名" list="mat-names" style="min-width:140px"></td>
+    <td><input type="text" data-r="${idx}" data-f="spec"             value="${esc(r.spec||'')}"             placeholder="規格"></td>
     <td><select data-r="${idx}" data-f="category" style="font-size:11px;width:100%">
       ${CATEGORIES.map(c=>`<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-r="${idx}" data-f="usage_location" value="${esc(r.usage_location||'')}" placeholder="使用箇所"></td>
+    <td><input type="text" data-r="${idx}" data-f="usage_location"   value="${esc(r.usage_location||'')}"   placeholder="使用箇所" style="min-width:110px"></td>
     <td><input type="number" step="0.01" data-r="${idx}" data-f="usage_quantity" value="${esc(r.usage_quantity||'')}" placeholder="0" oninput="calcRowPrice(${idx})" style="width:55px;text-align:right"></td>
     <td><select data-r="${idx}" data-f="unit" style="font-size:11px;width:48px">
       ${UNITS.map(u=>`<option value="${u}" ${r.unit===u?'selected':''}>${u}</option>`).join('')}
     </select></td>
-    ${[1,2,3,4,5,6,7].map(n=>colCell(r,idx,n)).join('')}
-    <td><input type="number" step="0.1" data-r="${idx}" data-f="loss_rate" value="${esc(r.loss_rate||'')}" placeholder="0" style="width:50px;text-align:right"></td>
-    <td><input type="number" step="1" data-r="${idx}" data-f="unit_price" value="${esc(r.unit_price||'')}" placeholder="0" oninput="calcRowPrice(${idx})" style="width:65px;text-align:right"></td>
+    ${colorCells}
+    <td><input type="number" step="0.1" data-r="${idx}" data-f="loss_rate"  value="${esc(r.loss_rate||'')}"  placeholder="0" style="width:50px;text-align:right"></td>
+    <td><input type="number" step="1"   data-r="${idx}" data-f="unit_price" value="${esc(r.unit_price||'')}" placeholder="0" oninput="calcRowPrice(${idx})" style="width:65px;text-align:right"></td>
     <td id="rp-${idx}" style="text-align:right;font-weight:600;font-size:12px;color:var(--c-primary);padding-right:6px">${r.unit_price&&r.usage_quantity?Math.round(r.unit_price*r.usage_quantity).toLocaleString()+'円':'-'}</td>
     <td><select data-r="${idx}" data-f="supplier_name" style="font-size:11px;width:100%">
-      <option value="">-</option>${_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}" ${r.supplier_name===s.supplier_name?'selected':''}>${esc(s.supplier_name)}</option>`).join('')}
+      <option value="">-</option>${_masters.suppliers.map(s=>`<option value="${esc(sName(s))}" ${r.supplier_name===sName(s)?'selected':''}>${esc(sName(s))}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-r="${idx}" data-f="memo" value="${esc(r.memo||'')}" placeholder="メモ" style="min-width:90px"></td>
+    <td><input type="text" data-r="${idx}" data-f="maker_name" value="${esc(r.maker_name||'')}" placeholder="メーカー" style="min-width:80px"></td>
+    <td><input type="text" data-r="${idx}" data-f="memo"        value="${esc(r.memo||'')}"      placeholder="メモ" style="min-width:80px"></td>
     <td><button class="del-btn" onclick="delMatRow(${idx})" title="削除">✕</button></td>`;
   tbody.appendChild(tr);
 }
@@ -952,10 +971,34 @@ function toggleAllProcess(chk) {
 }
 
 function addProcessRow() {
+  // 現在の入力値を保存してから追加
+  _processRows.forEach((_,i)=>{
+    _processRows[i].process_name   = getProcessField(i,'process_name');
+    _processRows[i].process_type   = getProcessField(i,'process_type');
+    _processRows[i].factory_name   = getProcessField(i,'factory_name');
+    _processRows[i].supplier_name  = getProcessField(i,'supplier_name');
+    _processRows[i].planned_date   = getProcessField(i,'planned_date');
+    _processRows[i].actual_date    = getProcessField(i,'actual_date');
+    _processRows[i].status         = getProcessField(i,'status');
+    _processRows[i].memo           = getProcessField(i,'memo');
+  });
   _processRows.push({seq:_processRows.length+1,process_name:'',process_type:'縫製',factory_name:'',supplier_name:'',planned_date:'',actual_date:'',status:'pending',memo:''});
   renderProcessTable();
 }
-function delProcessRow(idx) { _processRows.splice(idx,1); renderProcessTable(); }
+function delProcessRow(idx) {
+  _processRows.forEach((_,i)=>{
+    _processRows[i].process_name  = getProcessField(i,'process_name');
+    _processRows[i].process_type  = getProcessField(i,'process_type');
+    _processRows[i].factory_name  = getProcessField(i,'factory_name');
+    _processRows[i].supplier_name = getProcessField(i,'supplier_name');
+    _processRows[i].planned_date  = getProcessField(i,'planned_date');
+    _processRows[i].actual_date   = getProcessField(i,'actual_date');
+    _processRows[i].status        = getProcessField(i,'status');
+    _processRows[i].memo          = getProcessField(i,'memo');
+  });
+  _processRows.splice(idx,1);
+  renderProcessTable();
+}
 
 function getProcessField(idx, field) {
   const el = document.querySelector(`[data-p="${idx}"][data-f="${field}"]`); return el?el.value:'';
@@ -1199,100 +1242,132 @@ async function pdfProductSheet() {
   openPrintWindow(html, '製品情報シート_'+p.brand_product_no);
 }
 
-// ③ 加工発注書（チェックした工程をまとめて発注先別に）
+// ③ 加工発注書（単価入力ポップアップ→PDF生成）
 async function pdfProcessOrder() {
   document.getElementById('pdf-menu').style.display='none';
-  // 工程タブが開いていない場合はデータを取得
   if(!_processRows.length) {
     const res = await api('processes.get', {style_code:_currentProduct.style_code});
     _processRows = res?.items||[];
   }
   const checked = Array.from(document.querySelectorAll('.process-chk:checked')).map(c=>Number(c.dataset.idx));
-  if(!checked.length) { toast('工程タブでチェックを入れてください','error'); return; }
+  if(!checked.length) { toast('工程タブで発注する工程にチェックを入れてください','error'); return; }
 
   const selected = checked.map(i=>({
     ...(_processRows[i]||{}),
-    process_name: getProcessField(i,'process_name')||_processRows[i]?.process_name||'',
-    supplier_name:getProcessField(i,'supplier_name')||_processRows[i]?.supplier_name||'',
-    factory_name: getProcessField(i,'factory_name')||_processRows[i]?.factory_name||'',
-    planned_date: getProcessField(i,'planned_date')||_processRows[i]?.planned_date||'',
+    process_name:  getProcessField(i,'process_name') ||_processRows[i]?.process_name||'',
+    supplier_name: getProcessField(i,'supplier_name')||_processRows[i]?.supplier_name||'',
+    factory_name:  getProcessField(i,'factory_name') ||_processRows[i]?.factory_name||'',
+    planned_date:  getProcessField(i,'planned_date') ||_processRows[i]?.planned_date||'',
   }));
 
   // 発注先でグループ化
   const groups = {};
   selected.forEach(r=>{
     const key = r.supplier_name||r.factory_name||'直取引';
-    if(!groups[key]) groups[key]={supplier:r.supplier_name||r.factory_name, factory:r.factory_name, processes:[]};
+    if(!groups[key]) groups[key]={supplier:r.supplier_name||'直取引', factory:r.factory_name, processes:[]};
     groups[key].processes.push(r);
   });
 
-  // 発注数量取得
-  const qtyRes = await api('order_qty.get', {style_code:_currentProduct.style_code});
-  const qtyRows = qtyRes?.items||[];
   const colors = _productColors.filter(c=>c.code);
-  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+
+  // 単価入力ポップアップ
+  const ov = document.createElement('div');
+  ov.id='order-price-ov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
+
+  let groupsHtml = '';
+  Object.entries(groups).forEach(([key,g],gi)=>{
+    const processNames = g.processes.map(p=>p.process_name).join('・');
+    groupsHtml += `<div style="margin-bottom:16px;padding:12px;border:1px solid var(--c-border);border-radius:8px">
+      <div style="font-weight:600;margin-bottom:8px;color:var(--c-primary)">【発注先: ${esc(g.supplier)}】${esc(processNames)}</div>
+      <p style="font-size:11px;color:var(--c-text2);margin-bottom:8px">カラーごとに工賃単価を入力してください（円/着）</p>
+      ${colors.map((c,ci)=>`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <span style="font-size:12px;min-width:120px">Col.${ci+1} ${esc(c.code)} ${esc(c.name)}</span>
+          <input type="number" id="price-${gi}-${ci}" placeholder="0" min="0" style="width:100px;text-align:right"> 円/着
+        </div>`).join('')}
+    </div>`;
+  });
+
+  ov.innerHTML = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:500px;max-width:95vw;max-height:80vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:16px">📄 加工発注書 — 工賃単価入力</h3>
+    ${groupsHtml}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-secondary" onclick="document.getElementById('order-price-ov').remove()">キャンセル</button>
+      <button class="btn btn-primary" onclick="generateProcessOrderPDF()">発注書を発行する</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+
+  // グループ情報をグローバルに保持
+  window._orderGroups = groups;
+}
+
+async function generateProcessOrderPDF() {
+  const groups = window._orderGroups || {};
+  const colors = _productColors.filter(c=>c.code);
+  const p = _currentProduct;
+
+  // 発注数量取得
+  const qtyRes = await api('order_qty.get', {style_code:p.style_code});
+  const qtyRows = qtyRes?.items||[];
+  const sizes = (p.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
   const qtyMap = {};
   qtyRows.forEach(r=>{ if(!qtyMap[r.color_code]) qtyMap[r.color_code]={}; qtyMap[r.color_code][r.size_name]=Number(r.quantity)||0; });
 
-  const p = _currentProduct;
-  let pages = '';
-  let pageIdx = 0;
+  let pages='', pageIdx=0;
   const totalPages = Object.keys(groups).length;
 
-  for(const [supKey, group] of Object.entries(groups)) {
-    // 発注番号採番
+  for(const [key,g] of Object.entries(groups)) {
+    const gi = Object.keys(groups).indexOf(key);
     const noRes = await api('order_no.generate', {type:'S'});
     const orderNo = noRes?.order_no||'RL-S-??????';
+    const processNames = g.processes.map(r=>r.process_name).join('・');
+    const plannedDate = g.processes.map(r=>r.planned_date).filter(Boolean).sort().pop()||'';
 
-    // 発注数量テーブル（カラー単価入力欄付き）
-    let qtyHtml='', grandTotal=0;
-    if(colors.length && sizes.length) {
-      const colTotals={}; sizes.forEach(s=>colTotals[s]=0);
-      const qRows = colors.map(c=>{
-        let rowTotal=0;
-        const cells=sizes.map(s=>{ const v=(qtyMap[c.code]||{})[s]||0; rowTotal+=v; colTotals[s]+=v; grandTotal+=v; return `<td style="text-align:right">${v||''}</td>`; }).join('');
-        return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700">${rowTotal}</td><td style="text-align:right">___円</td></tr>`;
-      }).join('');
-      const totCells=sizes.map(s=>`<td style="text-align:right;font-weight:700;color:#2B5CE6">${colTotals[s]}</td>`).join('');
-      qtyHtml=`<table><thead><tr><th>カラー</th>${sizes.map(s=>`<th style="text-align:right">${esc(s)}</th>`).join('')}<th style="text-align:right">合計</th><th style="text-align:right">工賃単価</th></tr></thead>
-      <tbody>${qRows}<tr class="total-row"><td>合計</td>${totCells}<td style="text-align:right;font-weight:700;font-size:11pt">${grandTotal}</td><td></td></tr></tbody></table>`;
-    }
+    // 発注数量テーブル＋単価＋金額
+    let grandTotal=0, grandAmt=0;
+    const colTotals={}; sizes.forEach(s=>colTotals[s]=0);
+    const colAmts={}; colors.forEach((c,ci)=>colAmts[ci]=0);
 
-    const processNames = group.processes.map(r=>r.process_name).join('・');
-    const plannedDate = group.processes.map(r=>r.planned_date).filter(Boolean).sort().pop()||'';
+    const qRows = colors.map((c,ci)=>{
+      const price = parseFloat(document.getElementById(`price-${gi}-${ci}`)?.value)||0;
+      let rowTotal=0, rowAmt=0;
+      const cells=sizes.map(s=>{ const v=(qtyMap[c.code]||{})[s]||0; rowTotal+=v; colTotals[s]+=v; return `<td style="text-align:right">${v||''}</td>`; }).join('');
+      rowAmt = rowTotal*price;
+      grandTotal+=rowTotal; grandAmt+=rowAmt;
+      return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700">${rowTotal}</td><td style="text-align:right">${price?price.toLocaleString()+'円':''}</td><td style="text-align:right;font-weight:700">${rowAmt?rowAmt.toLocaleString()+'円':''}</td></tr>`;
+    }).join('');
+    const totCells=sizes.map(s=>`<td style="text-align:right;font-weight:700;color:#2B5CE6">${colTotals[s]||''}</td>`).join('');
 
     // 履歴保存
-    await api('order_history.save', {
-      order_no:orderNo, order_type:'加工発注', style_code:p.style_code,
-      supplier_name:group.supplier, process_names:processNames,
-      total_qty:grandTotal, memo:''
-    });
+    await api('order_history.save',{order_no:orderNo,order_type:'加工発注',style_code:p.style_code,supplier_name:g.supplier,process_names:processNames,total_qty:grandTotal,total_amount:grandAmt,memo:''});
 
-    pages += `${pageIdx>0?'<div class="page-break"></div>':''}
+    pages+=`${pageIdx>0?'<div class="page-break"></div>':''}
     <div class="header">
-      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. 京都市右京区</div></div>
-      <div><div class="doc-title">加 工 発 注 書</div>
-      <div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
+      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd.</div></div>
+      <div><div class="doc-title">加 工 発 注 書</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd;font-size:8.5pt">
-      <div class="info-row"><span class="lbl">発注先：</span><span class="val" style="font-weight:700;font-size:11pt">${esc(group.supplier)}</span></div>
+      <div class="info-row"><span class="lbl">発注先：</span><span class="val" style="font-weight:700;font-size:11pt">${esc(g.supplier)}</span></div>
       <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
-      <div class="info-row"><span class="lbl">納品先：</span><span class="val">${esc(group.factory)} ${group.factory!==group.supplier?'（作業場所）':''}</span></div>
+      <div class="info-row"><span class="lbl">投入先：</span><span class="val">${esc(g.factory||g.supplier)}</span></div>
       <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
       <div class="info-row"><span class="lbl">加工内容：</span><span class="val" style="color:#2B5CE6;font-weight:700">${esc(processNames)}</span></div>
       <div class="info-row"><span class="lbl">納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(plannedDate)}</span></div>
     </div>
     <div class="sec-title">発注数量・工賃</div>
-    ${qtyHtml}
-    <div style="margin-top:10pt">
-      <div class="sec-title">備考・指示事項</div>
-      <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;min-height:36pt;font-size:8.5pt;color:#888">（指示事項）</div>
-    </div>
+    <table><thead><tr><th>カラー</th>${sizes.map(s=>`<th style="text-align:right">${esc(s)}</th>`).join('')}<th style="text-align:right">合計</th><th style="text-align:right">工賃単価</th><th style="text-align:right">金額</th></tr></thead>
+    <tbody>${qRows}<tr class="total-row"><td>合計</td>${totCells}<td style="text-align:right;font-weight:700;color:#2B5CE6">${grandTotal}</td><td></td><td style="text-align:right;font-weight:700;font-size:11pt;color:#2B5CE6">${grandAmt.toLocaleString()}円</td></tr></tbody></table>
+    <div style="margin-top:10pt"><div class="sec-title">備考・指示事項</div>
+    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;min-height:36pt;color:#888;font-size:8.5pt">（指示事項）</div></div>
     <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
     <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書 / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
     pageIdx++;
   }
-  openPrintWindow(pages, '加工発注書_'+p.brand_product_no);
+
+  document.getElementById('order-price-ov')?.remove();
+  openPrintWindow(pages,'加工発注書_'+p.brand_product_no);
   toast('発注書を発行しました（履歴保存済）','success');
 }
 
@@ -1352,12 +1427,12 @@ async function pdfProcessSheet() {
 let _masterTab='supplier';
 function renderMastersPage(main) {
   main.innerHTML=`<div class="page-header"><h1>マスタ管理</h1></div>
-    <div style="display:flex;gap:4px;border-bottom:1px solid var(--c-border);margin-bottom:20px">
-      <button class="fs-tab ${_masterTab==='supplier'?'active':''}" onclick="switchMasterTab('supplier')">🏭 仕入先</button>
-      <button class="fs-tab ${_masterTab==='factory'?'active':''}"  onclick="switchMasterTab('factory')">🏗️ 加工場</button>
-      <button class="fs-tab ${_masterTab==='material'?'active':''}" onclick="switchMasterTab('material')">🧵 資材</button>
-      <button class="fs-tab ${_masterTab==='color'?'active':''}"    onclick="switchMasterTab('color')">🎨 カラー</button>
-      <button class="fs-tab ${_masterTab==='size'?'active':''}"     onclick="switchMasterTab('size')">📐 サイズ</button>
+    <div style="display:flex;gap:4px;border-bottom:1px solid var(--c-border);margin-bottom:20px;flex-wrap:wrap">
+      <button class="fs-tab ${_masterTab==='partner'?'active':''}"   onclick="switchMasterTab('partner')">🏭 仕入/加工先</button>
+      <button class="fs-tab ${_masterTab==='customer'?'active':''}"  onclick="switchMasterTab('customer')">👤 得意先</button>
+      <button class="fs-tab ${_masterTab==='material'?'active':''}"  onclick="switchMasterTab('material')">🧵 資材</button>
+      <button class="fs-tab ${_masterTab==='color'?'active':''}"     onclick="switchMasterTab('color')">🎨 カラー</button>
+      <button class="fs-tab ${_masterTab==='size'?'active':''}"      onclick="switchMasterTab('size')">📐 サイズ</button>
     </div>
     <div id="master-content"></div>`;
   switchMasterTab(_masterTab);
@@ -1369,15 +1444,201 @@ function switchMasterTab(tab) {
   const idx=['supplier','factory','material','color','size'].indexOf(tab);
   if(tabs[idx]) tabs[idx].classList.add('active');
   const c=document.getElementById('master-content'); if(!c) return;
-  if(tab==='supplier') renderSupplierPage(c);
-  if(tab==='factory')  renderFactoryPage(c);
-  if(tab==='material') renderMaterialPage(c);
+  if(tab==='partner')   renderPartnerPage(c);
+  if(tab==='customer')  renderCustomerPage(c);
+  if(tab==='material')  renderMaterialPage(c);
   if(tab==='color')    renderColorPage(c);
   if(tab==='size')     renderSizePage(c);
 }
 
-// ---- 仕入先 ----
-function renderSupplierPage(c) {
+// ---- 仕入/加工先マスタ（統合） ----
+const PARTNER_CATEGORIES = ['生地仕入先','副資材仕入先','縫製工場','刺繍工場','プリント工場','染色工場','整理加工','検品','商社','その他'];
+
+function renderPartnerPage(c) {
+  c.innerHTML=`<div class="card">
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+      <h3 style="font-size:15px;font-weight:700;flex:1">仕入/加工先マスタ</h3>
+      <button class="btn btn-primary btn-sm" onclick="openPartnerForm()">＋ 新規登録</button>
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer">📥 CSVインポート<input type="file" accept=".csv" style="display:none" onchange="importPartnerCSV(event)"></label>
+      <button class="btn btn-secondary btn-sm" onclick="exportCSV(_masters.partners,['partner_id','partner_name','is_supplier','is_factory','category','payment_partner_name','contact_name','tel','fax','email','address','payment_terms','memo'],'仕入加工先マスタ')">📤 エクスポート</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="filterPartners('')" id="pf-all">全て</button>
+      <button class="btn btn-secondary btn-sm" onclick="filterPartners('supplier')" id="pf-sup">仕入先のみ</button>
+      <button class="btn btn-secondary btn-sm" onclick="filterPartners('factory')" id="pf-fac">加工先のみ</button>
+    </div>
+    <table class="master-table" id="partner-table">
+      <thead><tr><th>名称</th><th>種別</th><th>カテゴリ</th><th>支払先</th><th>担当者</th><th>TEL</th><th style="width:80px">操作</th></tr></thead>
+      <tbody>${renderPartnerRows(_masters.partners)}</tbody>
+    </table></div>
+    <div id="partner-form"></div>`;
+}
+
+function renderPartnerRows(items) {
+  if(!items||!items.length) return '<tr><td colspan="7" style="text-align:center;color:var(--c-text3);padding:30px">登録なし</td></tr>';
+  return items.map((p,i)=>{
+    const types = [];
+    if(p.is_supplier===true||p.is_supplier==='TRUE') types.push('<span class="badge badge-sampling">仕入先</span>');
+    if(p.is_factory===true||p.is_factory==='TRUE')   types.push('<span class="badge badge-in_production">加工先</span>');
+    return `<tr><td><strong>${esc(p.partner_name)}</strong></td><td>${types.join(' ')}</td>
+      <td>${esc(p.category||'')}</td><td>${esc(p.payment_partner_name||'（直取引）')}</td>
+      <td>${esc(p.contact_name||'')}</td><td>${esc(p.tel||'')}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="openPartnerForm(${i})">編集</button></td></tr>`;
+  }).join('');
+}
+
+function filterPartners(type) {
+  let items = _masters.partners;
+  if(type==='supplier') items=items.filter(p=>p.is_supplier===true||p.is_supplier==='TRUE');
+  if(type==='factory')  items=items.filter(p=>p.is_factory===true||p.is_factory==='TRUE');
+  const tbody=document.querySelector('#partner-table tbody');
+  if(tbody) tbody.innerHTML=renderPartnerRows(items);
+}
+
+function openPartnerForm(idx) {
+  const p = idx!==undefined ? _masters.partners[idx] : null;
+  const isS = p?.is_supplier===true||p?.is_supplier==='TRUE';
+  const isF = p?.is_factory===true||p?.is_factory==='TRUE';
+  // 支払先（仕入先）の選択肢
+  const payOpts = '<option value="">（直取引・支払先なし）</option>'+
+    _masters.partners.filter(x=>x.is_supplier===true||x.is_supplier==='TRUE').map(x=>
+      `<option value="${esc(x.partner_id)}" data-name="${esc(x.partner_name)}" ${p?.payment_partner_id===x.partner_id?'selected':''}>${esc(x.partner_name)}</option>`
+    ).join('');
+  const a=document.getElementById('partner-form'); if(!a) return;
+  a.innerHTML=`<div class="card" style="margin-top:16px">
+    <h3 style="font-size:15px;font-weight:700;margin-bottom:16px">${p?'編集':'新規登録'}</h3>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>名称 ★</label><input type="text" id="pt-name" value="${esc(p?.partner_name||'')}"></div>
+      <div class="form-group"><label>カテゴリ</label>
+        <select id="pt-cat">${PARTNER_CATEGORIES.map(c=>`<option value="${c}" ${p?.category===c?'selected':''}>${c}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label>種別（複数選択可）★</label>
+      <div style="display:flex;gap:16px;margin-top:6px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="pt-is-sup" ${isS?'checked':''} style="width:15px;height:15px" onchange="checkPartnerType()"> 仕入先（請求受取・支払先）
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="pt-is-fac" ${isF?'checked':''} style="width:15px;height:15px" onchange="checkPartnerType()"> 加工先（実作業場所）
+        </label>
+      </div>
+    </div>
+    <div class="form-group" id="payment-partner-wrap" style="${isS?'display:none':''}">
+      <label>支払先（仕入先）<span style="color:var(--c-danger);font-size:11px"> ※加工先のみの場合は必須</span></label>
+      <select id="pt-pay" onchange="onPayPartnerSel(this)">${payOpts}</select>
+      <input type="hidden" id="pt-pay-id" value="${esc(p?.payment_partner_id||'')}">
+      <input type="hidden" id="pt-pay-name" value="${esc(p?.payment_partner_name||'')}">
+    </div>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>担当者名</label><input type="text" id="pt-contact" value="${esc(p?.contact_name||'')}"></div>
+      <div class="form-group"><label>TEL</label><input type="text" id="pt-tel" value="${esc(p?.tel||'')}"></div>
+    </div>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>FAX</label><input type="text" id="pt-fax" value="${esc(p?.fax||'')}"></div>
+      <div class="form-group"><label>メール</label><input type="text" id="pt-email" value="${esc(p?.email||'')}"></div>
+    </div>
+    <div class="form-group"><label>住所</label><input type="text" id="pt-addr" value="${esc(p?.address||'')}"></div>
+    <div class="form-group"><label>支払条件</label><input type="text" id="pt-pay-terms" value="${esc(p?.payment_terms||'')}"></div>
+    <div class="form-group"><label>備考</label><textarea id="pt-memo">${esc(p?.memo||'')}</textarea></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-secondary" onclick="document.getElementById('partner-form').innerHTML=''">キャンセル</button>
+      <button class="btn btn-primary" onclick="savePartner('${esc(p?.partner_id||'')}')">保存する</button>
+    </div></div>`;
+  a.scrollIntoView({behavior:'smooth'});
+}
+
+function checkPartnerType() {
+  const isSup = document.getElementById('pt-is-sup')?.checked;
+  const wrap  = document.getElementById('payment-partner-wrap');
+  if(wrap) wrap.style.display = isSup ? 'none' : '';
+}
+function onPayPartnerSel(sel) {
+  const opt=sel.options[sel.selectedIndex];
+  document.getElementById('pt-pay-id').value=opt.value;
+  document.getElementById('pt-pay-name').value=opt.dataset.name||'';
+}
+
+async function savePartner(id) {
+  const g=el=>document.getElementById(el)?.value||'';
+  const isSup=document.getElementById('pt-is-sup')?.checked||false;
+  const isFac=document.getElementById('pt-is-fac')?.checked||false;
+  if(!g('pt-name')){toast('名称を入力してください','error');return;}
+  if(!isSup&&!isFac){toast('仕入先または加工先にチェックを入れてください','error');return;}
+  if(!isSup&&isFac&&!g('pt-pay-id')){toast('加工先のみの場合は支払先の仕入先を選択してください','error');return;}
+  const res=await api('partners.upsert',{partner_id:id||undefined,partner_name:g('pt-name'),category:g('pt-cat'),is_supplier:isSup,is_factory:isFac,payment_partner_id:g('pt-pay-id'),payment_partner_name:g('pt-pay-name'),contact_name:g('pt-contact'),tel:g('pt-tel'),fax:g('pt-fax'),email:g('pt-email'),address:g('pt-addr'),payment_terms:g('pt-pay-terms'),memo:g('pt-memo')});
+  if(!res||!res.ok){toast(res?.error||'保存失敗','error');return;}
+  toast('保存しました','success');
+  const r=await api('partners.list'); if(r){_masters.partners=r.items;_masters.suppliers=r.items.filter(p=>p.is_supplier===true||p.is_supplier==='TRUE');_masters.factories=r.items.filter(p=>p.is_factory===true||p.is_factory==='TRUE');}
+  renderPartnerPage(document.getElementById('master-content'));
+}
+
+async function importPartnerCSV(e) {
+  const f=e.target.files[0]; if(!f) return;
+  const rows=(await f.text()).split('\n').map(r=>r.split(',').map(v=>v.replace(/^"|"$/g,'').trim()));
+  let n=0;
+  for(let i=1;i<rows.length;i++){
+    if(!rows[i][0]) continue;
+    await api('partners.upsert',{partner_name:rows[i][0]||'',is_supplier:rows[i][1]==='TRUE',is_factory:rows[i][2]==='TRUE',category:rows[i][3]||'',contact_name:rows[i][4]||'',tel:rows[i][5]||'',email:rows[i][6]||'',address:rows[i][7]||''});
+    n++;
+  }
+  toast(n+'件インポートしました','success');
+  const r=await api('partners.list'); if(r){_masters.partners=r.items;_masters.suppliers=r.items.filter(p=>p.is_supplier===true||p.is_supplier==='TRUE');_masters.factories=r.items.filter(p=>p.is_factory===true||p.is_factory==='TRUE');}
+  renderPartnerPage(document.getElementById('master-content'));
+}
+
+// ---- 得意先マスタ ----
+function renderCustomerPage(c) {
+  c.innerHTML=`<div class="card">
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+      <h3 style="font-size:15px;font-weight:700;flex:1">得意先マスタ</h3>
+      <button class="btn btn-primary btn-sm" onclick="openCustomerForm()">＋ 新規登録</button>
+    </div>
+    <table class="master-table">
+      <thead><tr><th>得意先名</th><th>ブランド名</th><th>担当者</th><th>TEL</th><th>メール</th><th style="width:80px">操作</th></tr></thead>
+      <tbody>${_masters.customers.length===0?'<tr><td colspan="6" style="text-align:center;color:var(--c-text3);padding:30px">登録なし</td></tr>':
+        _masters.customers.map((cu,i)=>`<tr><td><strong>${esc(cu.customer_name)}</strong></td><td>${esc(cu.brand_name||'')}</td><td>${esc(cu.contact_name||'')}</td><td>${esc(cu.tel||'')}</td><td>${esc(cu.email||'')}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="openCustomerForm(${i})">編集</button></td></tr>`).join('')}
+      </tbody>
+    </table></div>
+    <div id="customer-form"></div>`;
+}
+
+function openCustomerForm(idx) {
+  const cu=idx!==undefined?_masters.customers[idx]:null;
+  const a=document.getElementById('customer-form'); if(!a) return;
+  a.innerHTML=`<div class="card" style="margin-top:16px">
+    <h3 style="font-size:15px;font-weight:700;margin-bottom:16px">${cu?'得意先を編集':'新規得意先登録'}</h3>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>得意先名 ★</label><input type="text" id="cu-name" value="${esc(cu?.customer_name||'')}"></div>
+      <div class="form-group"><label>ブランド名</label><input type="text" id="cu-brand" value="${esc(cu?.brand_name||'')}"></div>
+    </div>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>担当者名</label><input type="text" id="cu-contact" value="${esc(cu?.contact_name||'')}"></div>
+      <div class="form-group"><label>TEL</label><input type="text" id="cu-tel" value="${esc(cu?.tel||'')}"></div>
+    </div>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>FAX</label><input type="text" id="cu-fax" value="${esc(cu?.fax||'')}"></div>
+      <div class="form-group"><label>メール</label><input type="text" id="cu-email" value="${esc(cu?.email||'')}"></div>
+    </div>
+    <div class="form-group"><label>住所</label><input type="text" id="cu-addr" value="${esc(cu?.address||'')}"></div>
+    <div class="form-group"><label>備考</label><textarea id="cu-memo">${esc(cu?.memo||'')}</textarea></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-secondary" onclick="document.getElementById('customer-form').innerHTML=''">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveCustomer('${esc(cu?.customer_id||'')}')">保存する</button>
+    </div></div>`;
+  a.scrollIntoView({behavior:'smooth'});
+}
+
+async function saveCustomer(id) {
+  const g=el=>document.getElementById(el)?.value||'';
+  if(!g('cu-name')){toast('得意先名を入力してください','error');return;}
+  const res=await api('customers.upsert',{customer_id:id||undefined,customer_name:g('cu-name'),brand_name:g('cu-brand'),contact_name:g('cu-contact'),tel:g('cu-tel'),fax:g('cu-fax'),email:g('cu-email'),address:g('cu-addr'),memo:g('cu-memo')});
+  if(!res||!res.ok){toast('保存失敗','error');return;}
+  toast('保存しました','success');
+  const r=await api('customers.list'); if(r) _masters.customers=r.items;
+  renderCustomerPage(document.getElementById('master-content'));
+}
   c.innerHTML=`<div class="card">
     <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
       <h3 style="font-size:15px;font-weight:700;flex:1">仕入先マスタ</h3>
@@ -1528,28 +1789,152 @@ async function importFactoryCSV(e) {
   renderFactoryPage(document.getElementById('master-content'));
 }
 
-// ---- 資材 ----
+// 資材マスタ検索ポップアップ（資材シートから追加）
+function openMatSearchPopup() {
+  const ov=document.createElement('div');
+  ov.id='mat-search-ov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:600px;max-width:95vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:12px">🔍 資材マスタから検索・追加</h3>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input type="text" id="msp-q" placeholder="品番・品名・メーカーで検索..." style="flex:1" oninput="filterMatPopup()" autofocus>
+      <select id="msp-cat" onchange="filterMatPopup()" style="width:110px;font-size:12px">
+        <option value="">全分類</option>
+        ${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+    </div>
+    <div id="msp-list" style="flex:1;overflow-y:auto;border:0.5px solid var(--c-border);border-radius:8px">
+      ${renderMatPopupList(_masters.materials)}
+    </div>
+    <p style="font-size:11px;color:var(--c-text3);margin-top:8px">行をクリックすると資材シートに追加されます</p>
+    <div style="display:flex;gap:8px;justify-content:space-between;margin-top:10px">
+      <button class="btn btn-secondary btn-sm" onclick="openMatMasterPopup('','')">＋ 新規資材をマスタ登録</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('mat-search-ov').remove()">閉じる</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click',e=>{if(e.target===ov) ov.remove();});
+  document.getElementById('msp-q')?.focus();
+}
+
+function renderMatPopupList(items) {
+  if(!items||!items.length) return '<div style="text-align:center;color:var(--c-text3);padding:30px">該当なし</div>';
+  return '<table style="width:100%;border-collapse:collapse;font-size:12px">'+
+    '<thead><tr style="position:sticky;top:0;background:var(--c-bg)">'+
+    '<th style="padding:6px 8px;text-align:left;border-bottom:0.5px solid var(--c-border)">品番</th>'+
+    '<th style="padding:6px 8px;text-align:left;border-bottom:0.5px solid var(--c-border)">品名</th>'+
+    '<th style="padding:6px 8px;border-bottom:0.5px solid var(--c-border)">分類</th>'+
+    '<th style="padding:6px 8px;border-bottom:0.5px solid var(--c-border)">規格</th>'+
+    '<th style="padding:6px 8px;border-bottom:0.5px solid var(--c-border)">メーカー</th>'+
+    '<th style="padding:6px 8px;text-align:right;border-bottom:0.5px solid var(--c-border)">単価</th>'+
+    '</tr></thead><tbody>'+
+    items.map(m=>`<tr onclick="selectMatFromPopup(${JSON.stringify(JSON.stringify(m))})" style="cursor:pointer;border-bottom:0.5px solid var(--c-border)" onmouseover="this.style.background='var(--c-primary-bg)'" onmouseout="this.style.background=''">
+      <td style="padding:6px 8px;font-family:monospace;font-size:11px">${esc(m.product_no||'')}</td>
+      <td style="padding:6px 8px"><strong>${esc(m.product_name||'')}</strong></td>
+      <td style="padding:6px 8px">${esc(m.category||'')}</td>
+      <td style="padding:6px 8px">${esc(m.spec||'')}</td>
+      <td style="padding:6px 8px">${esc(m.maker_name||'')}</td>
+      <td style="padding:6px 8px;text-align:right">${m.unit_price?Number(m.unit_price).toLocaleString()+'円':''}</td>
+    </tr>`).join('')+
+    '</tbody></table>';
+}
+
+function filterMatPopup() {
+  const q  = (document.getElementById('msp-q')?.value||'').toLowerCase();
+  const cat= document.getElementById('msp-cat')?.value||'';
+  let items = _masters.materials;
+  if(q)   items=items.filter(m=>(m.product_name||'').toLowerCase().includes(q)||(m.product_no||'').toLowerCase().includes(q)||(m.maker_name||'').toLowerCase().includes(q));
+  if(cat) items=items.filter(m=>m.category===cat);
+  const el=document.getElementById('msp-list');
+  if(el) el.innerHTML=renderMatPopupList(items);
+}
+
+function selectMatFromPopup(mJson) {
+  const m = JSON.parse(mJson);
+  const idx = _materialRows.length;
+  const newRow = {
+    material_slot: String(idx+1).padStart(2,'0'),
+    product_no:    m.product_no||'',
+    product_name:  m.product_name||'',
+    spec:          m.spec||'',
+    category:      m.category||'',
+    unit:          m.unit||'m',
+    unit_price:    m.unit_price||'',
+    supplier_name: m.supplier_name||'',
+    maker_name:    m.maker_name||'',
+  };
+  _materialRows.push(newRow);
+  appendMatRow(document.getElementById('mat-tbody'), newRow, idx);
+  calcMatTotal();
+  toast('「'+m.product_name+'」を追加しました','success');
+}
+
+// ---- 資材マスタページ（CSV対応強化） ----
 function renderMaterialPage(c) {
   c.innerHTML=`<div class="card">
     <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
-      <h3 style="font-size:15px;font-weight:700;flex:1">資材マスタ</h3>
-      <input type="text" id="mat-s" placeholder="品名・品番で検索..." style="max-width:220px" oninput="filterMat()">
+      <h3 style="font-size:15px;font-weight:700;flex:1">資材マスタ（${_masters.materials.length}件）</h3>
+      <input type="text" id="mat-s" placeholder="品番・品名・メーカーで検索..." style="max-width:180px" oninput="filterMat()">
+      <select id="mat-cat-filter" onchange="filterMat()" style="width:90px;font-size:12px">
+        <option value="">全分類</option>${CATEGORIES.map(c2=>`<option value="${c2}">${c2}</option>`).join('')}
+      </select>
       <button class="btn btn-primary btn-sm" onclick="openMaterialForm()">＋ 新規登録</button>
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer">📥 CSVインポート<input type="file" accept=".csv" style="display:none" onchange="importMaterialCSV(event)"></label>
+      <button class="btn btn-secondary btn-sm" onclick="downloadMatTemplate()">📋 テンプレDL</button>
     </div>
     <table class="master-table" id="mat-master-table">
-      <thead><tr><th>ID</th><th>分類</th><th>品番</th><th>品名</th><th>規格</th><th>単位</th><th>単価</th><th>仕入先</th><th style="width:80px">操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>分類</th><th>品番</th><th>品名</th><th>規格</th><th>単位</th><th>単価</th><th>仕入先</th><th>メーカー</th><th style="width:80px">操作</th></tr></thead>
       <tbody>${matRows(_masters.materials)}</tbody>
     </table></div>
     <div id="mat-form"></div>`;
 }
 function matRows(items) {
-  if(!items||!items.length) return '<tr><td colspan="9" style="text-align:center;color:var(--c-text3);padding:30px">登録なし</td></tr>';
-  return items.map((m,i)=>`<tr><td><code style="font-size:11px">${esc(m.material_id)}</code></td><td>${esc(m.category||'')}</td><td>${esc(m.product_no||'')}</td><td>${esc(m.product_name||'')}</td><td>${esc(m.spec||'')}</td><td>${esc(m.unit||'')}</td><td>${m.unit_price?Number(m.unit_price).toLocaleString()+'円':''}</td><td>${esc(m.supplier_name||'')}</td><td><button class="btn btn-secondary btn-sm" onclick="openMaterialForm(${i})">編集</button></td></tr>`).join('');
+  if(!items||!items.length) return '<tr><td colspan="10" style="text-align:center;color:var(--c-text3);padding:30px">登録なし</td></tr>';
+  return items.map((m,i)=>`<tr>
+    <td><code style="font-size:11px">${esc(m.material_id)}</code></td>
+    <td>${esc(m.category||'')}</td><td>${esc(m.product_no||'')}</td>
+    <td>${esc(m.product_name||'')}</td><td>${esc(m.spec||'')}</td>
+    <td>${esc(m.unit||'')}</td><td>${m.unit_price?Number(m.unit_price).toLocaleString()+'円':''}</td>
+    <td>${esc(m.supplier_name||'')}</td><td>${esc(m.maker_name||'')}</td>
+    <td><button class="btn btn-secondary btn-sm" onclick="openMaterialForm(${i})">編集</button></td></tr>`).join('');
 }
 function filterMat() {
-  const q=document.getElementById('mat-s')?.value||'';
-  const items=q?_masters.materials.filter(m=>(m.product_name||'').includes(q)||(m.product_no||'').includes(q)):_masters.materials;
+  const q  = (document.getElementById('mat-s')?.value||'').toLowerCase();
+  const cat= document.getElementById('mat-cat-filter')?.value||'';
+  let items = _masters.materials;
+  if(q)   items=items.filter(m=>(m.product_name||'').toLowerCase().includes(q)||(m.product_no||'').toLowerCase().includes(q)||(m.maker_name||'').toLowerCase().includes(q));
+  if(cat) items=items.filter(m=>m.category===cat);
   const tbody=document.querySelector('#mat-master-table tbody'); if(tbody) tbody.innerHTML=matRows(items);
+}
+function downloadMatTemplate() {
+  const fields=['category','product_no','product_name','spec','quality','unit','supplier_name','maker_name','unit_price','memo'];
+  const csv='"'+fields.join('","')+'"\n'+
+    '"生地","TJ-001","サンプル天竺","160cm巾","綿100%","m","株式会社サンプル","サンプルテキスタイル","1200","サンプル"';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'}));
+  a.download='資材マスタ_インポートテンプレート.csv'; a.click();
+  toast('テンプレートをダウンロードしました','success');
+}
+async function importMaterialCSV(e) {
+  const f=e.target.files[0]; if(!f) return;
+  const text=await f.text();
+  const lines=text.split('\n');
+  const headers=lines[0].split(',').map(v=>v.replace(/^"|"$/g,'').trim());
+  const rows=[];
+  for(let i=1;i<lines.length;i++){
+    if(!lines[i].trim()) continue;
+    const vals=lines[i].split(',').map(v=>v.replace(/^"|"$/g,'').trim());
+    const obj={};
+    headers.forEach((h,hi)=>{ obj[h]=vals[hi]||''; });
+    rows.push(obj);
+  }
+  showLoading(true);
+  const res=await callGAS({action:'materials.import',token:_token,rows});
+  showLoading(false);
+  if(!res||!res.ok){toast('インポート失敗','error');return;}
+  toast(`${res.added}件追加・${res.skipped}件スキップ（重複品番）`,'success');
+  const m=await api('materials.list'); if(m) _masters.materials=m.items;
+  renderMaterialPage(document.getElementById('master-content'));
 }
 function openMaterialForm(idx) {
   const m=idx!==undefined?_masters.materials[idx]:null;
