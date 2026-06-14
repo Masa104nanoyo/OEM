@@ -294,24 +294,52 @@ async function openProduct(style_code) {
   document.getElementById('fs-badge').innerHTML=statusBadge(res.item.status);
   document.getElementById('fs-tabs').innerHTML=
     '<button class="fs-tab active" id="fstab-product"    onclick="switchFsTab(\'product\')">📋 製品シート</button>'+
-    '<button class="fs-tab"        id="fstab-materials"  onclick="switchFsTab(\'materials\')">🧵 資材シート</button>';
+    '<button class="fs-tab"        id="fstab-materials"  onclick="switchFsTab(\'materials\')">🧵 資材シート</button>'+
+    '<button class="fs-tab"        id="fstab-orderqty"   onclick="switchFsTab(\'orderqty\')">📊 発注数量</button>'+
+    '<button class="fs-tab"        id="fstab-processes"  onclick="switchFsTab(\'processes\')">🔧 工程</button>';
+  document.getElementById('fs-actions').innerHTML=
+    '<button class="btn btn-secondary btn-sm" onclick="showPdfMenu()">📄 PDF出力 ▼</button>'+
+    '<div id="pdf-menu" style="display:none;position:absolute;right:20px;top:52px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--radius);box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:200;min-width:200px">'+
+      '<button class="btn" style="display:block;width:100%;text-align:left;border:none;padding:10px 16px;border-radius:0" onclick="pdfSpec()">① 縫製仕様書_資材表</button>'+
+      '<button class="btn" style="display:block;width:100%;text-align:left;border:none;padding:10px 16px;border-radius:0" onclick="pdfProductSheet()">② 製品情報シート（発注書兼用）</button>'+
+      '<button class="btn" style="display:block;width:100%;text-align:left;border:none;padding:10px 16px;border-radius:0" onclick="pdfProcessOrder()">③ 加工発注書</button>'+
+      '<button class="btn" style="display:block;width:100%;text-align:left;border:none;padding:10px 16px;border-radius:0" onclick="pdfProcessSheet()">④ 工程表</button>'+
+    '</div>';
   document.getElementById('fs-footer').innerHTML=
     '<button class="btn btn-secondary" onclick="closeFull()">閉じる</button>'+
     '<button class="btn btn-primary"   onclick="saveFsTab()">保存する</button>';
   document.getElementById('fs-body').innerHTML=renderProductForm(_currentProduct);
   setupImagePaste();
   openFull(res.item.brand_product_no||res.item.style_code);
+  // PDFメニューを閉じる
+  document.addEventListener('click', closePdfMenu);
 }
+
+function showPdfMenu() {
+  const m=document.getElementById('pdf-menu');
+  if(m) m.style.display = m.style.display==='none' ? 'block' : 'none';
+}
+function closePdfMenu(e) {
+  const m=document.getElementById('pdf-menu');
+  if(m && !m.contains(e.target) && !e.target.textContent.includes('PDF出力')) {
+    m.style.display='none';
+  }
+}
+
 function switchFsTab(tab) {
   _currentFsTab=tab;
   document.querySelectorAll('.fs-tab').forEach(t=>t.classList.remove('active'));
   const b=document.getElementById('fstab-'+tab); if(b) b.classList.add('active');
-  if(tab==='product')  { document.getElementById('fs-body').innerHTML=renderProductForm(_currentProduct); setupImagePaste(); }
-  if(tab==='materials') renderMaterialsTab();
+  if(tab==='product')   { document.getElementById('fs-body').innerHTML=renderProductForm(_currentProduct); setupImagePaste(); }
+  if(tab==='materials')  renderMaterialsTab();
+  if(tab==='orderqty')   renderOrderQtyTab();
+  if(tab==='processes')  renderProcessesTab();
 }
 async function saveFsTab() {
   if(_currentFsTab==='product')   await saveProductData();
   if(_currentFsTab==='materials') await saveMaterialsData();
+  if(_currentFsTab==='orderqty')  await saveOrderQty();
+  if(_currentFsTab==='processes') await saveProcesses();
 }
 
 // ===== 製品フォーム =====
@@ -353,7 +381,8 @@ function renderProductForm(p) {
       <div class="form-row form-row-2">
         <div class="form-group"><label>ブランド</label><input type="text" id="f-brand" value="${esc(p?.brand||'')}"></div>
         <div class="form-group"><label>取引先</label>
-          <select id="f-client-sel" onchange="onClientSel(this)">${supOpts}</select>
+          <input type="text" placeholder="取引先を絞り込み..." oninput="filterClientSel(this)" style="margin-bottom:4px;font-size:12px">
+          <select id="f-client-sel" onchange="onClientSel(this)" size="3" style="width:100%;font-size:12px">${supOpts}</select>
           <input type="hidden" id="f-client-id" value="${esc(p?.client_id||'')}">
         </div>
       </div>
@@ -374,6 +403,18 @@ function renderProductForm(p) {
           <button class="btn btn-secondary btn-sm" type="button" onclick="openSizePopup()">選択 📐</button>
         </div>
       </div>
+      <div class="form-group"><label>🎨 製品カラー（Col.1〜7）</label>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+          <input type="text" id="f-color-display" value="${_productColors.filter(c=>c.code).map(c=>c.code+' '+c.name).join(' / ') || ''}" placeholder="クリックしてカラーを選択..." readonly style="cursor:pointer;flex:1" onclick="openColorPopup()">
+          <button class="btn btn-secondary btn-sm" type="button" onclick="openColorPopup()">選択 🎨</button>
+        </div>
+        <div id="color-preview" style="display:flex;flex-wrap:wrap;gap:4px">
+          ${_productColors.filter(c=>c.code).map((c,i)=>`
+            <span style="display:inline-flex;align-items:center;gap:4px;background:var(--c-primary-bg);color:var(--c-primary);padding:2px 8px;border-radius:4px;font-size:12px">
+              <span style="font-weight:600">Col.${_productColors.indexOf(c)+1}</span> ${esc(c.code)} ${esc(c.name)}
+            </span>`).join('')}
+        </div>
+      </div>
       <div class="form-group"><label>原産国</label><input type="text" id="f-country" value="${esc(p?.country_of_origin||'')}"></div>
     </div>
     <div class="section-card" style="margin-top:16px"><h3>🏭 生産情報</h3>
@@ -383,7 +424,13 @@ function renderProductForm(p) {
       </div>
       <div class="form-row form-row-2">
         <div class="form-group"><label>サンプルNo.</label><input type="text" id="f-sample-no" value="${esc(p?.sample_no||'')}"></div>
-        <div class="form-group"><label>縫製工場</label><select id="f-factory">${facOpts}</select></div>
+        <div class="form-group"><label>縫製工場</label>
+          <input type="text" id="f-factory-search" placeholder="工場名で絞り込み..." oninput="filterFactory()" style="margin-bottom:4px">
+          <select id="f-factory" size="4" style="width:100%;font-size:12px">
+            <option value="">-- 選択 --</option>
+            ${_masters.factories.map(f=>`<option value="${esc(f.factory_name)}" ${p?.factory_name===f.factory_name?'selected':''}>${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="form-row form-row-2">
         <div class="form-group"><label>製品納期</label><input type="date" id="f-delivery" value="${esc(p?.delivery_date||'')}"></div>
@@ -399,10 +446,6 @@ function renderProductForm(p) {
       <p style="font-size:11px;color:var(--c-text2);margin-bottom:10px">クリック・ドラッグ&ドロップ・Ctrl+Vで追加（最大6枚）</p>
       <div class="image-grid">${imgSlots}</div>
     </div>
-    <div class="section-card" style="margin-top:14px"><h3>🎨 製品カラー（Col.1〜7）</h3>
-      <p style="font-size:10px;color:var(--c-text3);margin-bottom:8px">カラーマスタから選択</p>
-      ${colorSelRows}
-    </div>
   </div>
 </div>`;
 }
@@ -410,18 +453,93 @@ function renderProductForm(p) {
 function onClientSel(sel) {
   document.getElementById('f-client-id').value = sel.value;
 }
-function onColorSel(i, sel) {
-  const opt = sel.options[sel.selectedIndex];
-  _productColors[i] = { code: opt.value, name: opt.dataset.name||'' };
+
+// 取引先キーワード絞り込み
+function filterClientSel(input) {
+  const q = input.value.toLowerCase();
+  const sel = document.getElementById('f-client-sel'); if(!sel) return;
+  Array.from(sel.options).forEach(opt=>{
+    opt.style.display = !q||opt.text.toLowerCase().includes(q)?'':'none';
+  });
+}
+
+// 加工場キーワード絞り込み
+function filterFactory() {
+  const q = (document.getElementById('f-factory-search')?.value||'').toLowerCase();
+  const sel = document.getElementById('f-factory'); if (!sel) return;
+  Array.from(sel.options).forEach(opt => {
+    opt.style.display = !q || opt.text.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+// カラー選択ポップアップ（チェックボックス方式）
+function openColorPopup() {
+  const ov = document.createElement('div');
+  ov.id = 'color-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--c-surface);border-radius:12px;padding:24px;width:560px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.25)';
+
+  box.innerHTML = `
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:12px">🎨 製品カラーを選択（最大7色）</h3>
+    <input type="text" id="color-search" placeholder="カラー名・コードで絞り込み..." oninput="filterColorList()" style="margin-bottom:12px">
+    <div id="color-list" style="flex:1;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:400px">
+      ${_masters.colors.map(c => {
+        const already = _productColors.find(pc=>pc.code===c.color_code);
+        const slotNum = already ? _productColors.indexOf(already)+1 : 0;
+        return `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--c-border);border-radius:6px;cursor:pointer;${slotNum?'background:var(--c-primary-bg);border-color:var(--c-primary);':''}">
+          <input type="checkbox" name="color-cb" value="${esc(c.color_code)}" data-name="${esc(c.color_name_ja)}" ${slotNum?'checked':''} style="width:14px;height:14px">
+          <span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:${esc(c.hex||'#ccc')};border:1px solid var(--c-border);flex-shrink:0"></span>
+          <span style="font-size:12px"><span style="font-family:monospace;font-weight:600">${esc(c.color_code)}</span> ${esc(c.color_name_ja)}</span>
+          ${slotNum?`<span style="margin-left:auto;font-size:10px;color:var(--c-primary);font-weight:600">Col.${slotNum}</span>`:''}
+        </label>`;
+      }).join('')}
+    </div>
+    <p style="font-size:11px;color:var(--c-text3);margin-top:10px">チェックした順にCol.1〜7に割り当てられます（最大7色）</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-secondary" onclick="document.getElementById('color-ov').remove()">キャンセル</button>
+      <button class="btn btn-primary" onclick="confirmColors()">確定</button>
+    </div>`;
+
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+  ov.addEventListener('click', e => { if(e.target===ov) ov.remove(); });
+}
+
+function filterColorList() {
+  const q = (document.getElementById('color-search')?.value||'').toLowerCase();
+  document.querySelectorAll('#color-list label').forEach(label => {
+    const text = label.textContent.toLowerCase();
+    label.style.display = !q || text.includes(q) ? '' : 'none';
+  });
+}
+
+function confirmColors() {
+  const checked = Array.from(document.querySelectorAll('#color-list input[name="color-cb"]:checked'));
+  if (checked.length > 7) { alert('カラーは最大7色まで選択できます'); return; }
+  _productColors = Array(7).fill(null).map((_,i) => {
+    if (i < checked.length) return { code: checked[i].value, name: checked[i].dataset.name||'' };
+    return { code:'', name:'' };
+  });
+  // 表示を更新
+  const disp = document.getElementById('f-color-display');
+  if (disp) disp.value = _productColors.filter(c=>c.code).map(c=>c.code+' '+c.name).join(' / ');
+  const prev = document.getElementById('color-preview');
+  if (prev) prev.innerHTML = _productColors.filter(c=>c.code).map((c,i)=>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--c-primary-bg);color:var(--c-primary);padding:2px 8px;border-radius:4px;font-size:12px">
+      <span style="font-weight:600">Col.${i+1}</span> ${esc(c.code)} ${esc(c.name)}
+    </span>`
+  ).join('');
+  document.getElementById('color-ov')?.remove();
 }
 
 function collectProductForm() {
   const g = id => document.getElementById(id)?.value||'';
   const colors = {};
   for (let i=0;i<7;i++) {
-    const sel = document.getElementById('pc-sel-'+i);
-    colors['product_color'+(i+1)+'_code'] = sel?.value||'';
-    colors['product_color'+(i+1)+'_name'] = sel?.options[sel.selectedIndex]?.dataset?.name||'';
+    colors['product_color'+(i+1)+'_code'] = _productColors[i]?.code||'';
+    colors['product_color'+(i+1)+'_name'] = _productColors[i]?.name||'';
   }
   return {
     brand_product_no:  g('f-brand-no'),
@@ -556,6 +674,7 @@ async function renderMaterialsTab() {
     <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <code style="background:var(--c-bg);padding:2px 8px;border-radius:4px;font-size:12px">${esc(_currentProduct.style_code)}</code>
       <button class="btn btn-secondary btn-sm" onclick="addMatRow()">＋ 行を追加</button>
+      <button class="btn btn-secondary btn-sm" onclick="openMatMasterPopup('','')">📚 資材マスタに登録</button>
       <div style="margin-left:auto;font-size:13px">着単価合計: <strong id="mat-total" style="font-size:16px;color:var(--c-primary)">-</strong></div>
     </div>
     <datalist id="mat-names">${_masters.materials.map(m=>`<option value="${esc(m.product_name)}">`).join('')}</datalist>
@@ -664,6 +783,569 @@ async function saveMaterialsData() {
   const res=await api('product_materials.save',{style_code:_currentProduct.style_code,rows});
   if(!res||!res.ok){toast(res?.error||'保存に失敗しました','error');return;}
   toast('資材シートを保存しました','success');
+}
+
+// ===== 発注数量タブ =====
+let _orderQtyData = {}; // {color_code: {size_name: qty}}
+
+async function renderOrderQtyTab() {
+  const res = await api('order_qty.get', {style_code: _currentProduct.style_code});
+  const rows = res?.items || [];
+  // データをマップに変換
+  _orderQtyData = {};
+  rows.forEach(r => {
+    if (!_orderQtyData[r.color_code]) _orderQtyData[r.color_code] = {};
+    _orderQtyData[r.color_code][r.size_name] = Number(r.quantity)||0;
+  });
+
+  const colors = _productColors.filter(c=>c.code);
+  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+
+  if (!colors.length) { document.getElementById('fs-body').innerHTML='<div class="empty-state"><div class="icon">🎨</div><p>製品シートでカラーを登録してください</p></div>'; return; }
+  if (!sizes.length)  { document.getElementById('fs-body').innerHTML='<div class="empty-state"><div class="icon">📐</div><p>製品シートでサイズ展開を登録してください</p></div>'; return; }
+
+  let html = `<div class="section-card">
+    <h3>📊 発注数量（カラー × サイズ）</h3>
+    <p style="font-size:12px;color:var(--c-text2);margin-bottom:14px">各セルに発注数量を入力してください</p>
+    <div style="overflow-x:auto"><table class="material-table" style="min-width:auto">
+    <thead><tr><th style="min-width:120px">カラー</th>`;
+  sizes.forEach(s => { html += `<th style="width:70px;text-align:right">${esc(s)}</th>`; });
+  html += `<th style="width:70px;text-align:right;background:#EEF2FD;color:#2B5CE6">合計</th></tr></thead><tbody>`;
+
+  colors.forEach(c => {
+    html += `<tr><td style="font-weight:600">${esc(c.code)} ${esc(c.name)}</td>`;
+    sizes.forEach(s => {
+      const v = (_orderQtyData[c.code]||{})[s] || '';
+      html += `<td><input type="number" min="0" data-color="${esc(c.code)}" data-size="${esc(s)}" value="${v}" placeholder="0" oninput="updateQtyTotal()" style="width:60px;text-align:right;border:none;background:transparent;font-size:13px"></td>`;
+    });
+    html += `<td id="row-total-${esc(c.code)}" style="text-align:right;font-weight:700;color:var(--c-primary);padding-right:8px">-</td></tr>`;
+  });
+
+  // 合計行
+  html += `<tr style="background:#EEF2FD"><td style="font-weight:700;color:#2B5CE6">合計</td>`;
+  sizes.forEach(s => { html += `<td id="col-total-${esc(s)}" style="text-align:right;font-weight:700;color:#2B5CE6">-</td>`; });
+  html += `<td id="grand-total" style="text-align:right;font-weight:700;font-size:15px;color:#2B5CE6">-</td></tr>`;
+  html += `</tbody></table></div></div>`;
+  document.getElementById('fs-body').innerHTML = html;
+  updateQtyTotal();
+}
+
+function updateQtyTotal() {
+  const colors = _productColors.filter(c=>c.code);
+  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+  const colTotals = {}; sizes.forEach(s=>{ colTotals[s]=0; });
+  let grand = 0;
+  colors.forEach(c => {
+    let rowTotal = 0;
+    sizes.forEach(s => {
+      const v = parseInt(document.querySelector(`[data-color="${c.code}"][data-size="${s}"]`)?.value)||0;
+      rowTotal += v; colTotals[s] += v; grand += v;
+    });
+    const rt = document.getElementById('row-total-'+c.code);
+    if(rt) rt.textContent = rowTotal.toLocaleString();
+  });
+  sizes.forEach(s => {
+    const ct = document.getElementById('col-total-'+s);
+    if(ct) ct.textContent = colTotals[s].toLocaleString();
+  });
+  const gt = document.getElementById('grand-total');
+  if(gt) gt.textContent = grand.toLocaleString();
+}
+
+async function saveOrderQty() {
+  const colors = _productColors.filter(c=>c.code);
+  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+  const rows = [];
+  colors.forEach(c => {
+    sizes.forEach(s => {
+      const v = parseInt(document.querySelector(`[data-color="${c.code}"][data-size="${s}"]`)?.value)||0;
+      if(v>0) rows.push({color_code:c.code, color_name:c.name, size_name:s, quantity:v});
+    });
+  });
+  const res = await api('order_qty.save', {style_code:_currentProduct.style_code, rows});
+  if(!res||!res.ok) { toast('保存失敗','error'); return; }
+  toast('発注数量を保存しました','success');
+}
+
+// ===== 工程タブ =====
+let _processRows = [];
+const PROCESS_STATUS = {pending:'未着手', in_progress:'進行中', completed:'完了', cancelled:'中止'};
+
+async function renderProcessesTab() {
+  const res = await api('processes.get', {style_code: _currentProduct.style_code});
+  _processRows = res?.items || [];
+  if(_processRows.length===0) {
+    _processRows = [{seq:1,process_name:'',process_type:'',factory_name:'',supplier_name:'',planned_date:'',actual_date:'',status:'pending',memo:''}];
+  }
+  renderProcessTable();
+}
+
+function renderProcessTable() {
+  const facOpts = '<option value="">-- 選択 --</option>'+_masters.factories.map(f=>`<option value="${esc(f.factory_name)}">${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('');
+  const supOpts = '<option value="">-- 選択 --</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}">${esc(s.supplier_name)}</option>`).join('');
+
+  let html = `<div class="section-card">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <h3 style="flex:1">🔧 工程管理</h3>
+      <button class="btn btn-secondary btn-sm" onclick="addProcessRow()">＋ 工程を追加</button>
+      <button class="btn btn-secondary btn-sm" onclick="pdfProcessOrder()">📄 加工発注書</button>
+    </div>
+    <div style="overflow-x:auto"><table class="material-table">
+    <thead><tr>
+      <th style="width:28px"><input type="checkbox" id="chk-all" onchange="toggleAllProcess(this)" title="全選択" style="width:14px;height:14px"></th>
+      <th style="width:30px">順</th>
+      <th style="min-width:90px">工程名</th>
+      <th style="width:80px">種別</th>
+      <th style="min-width:130px">加工場（実作業）</th>
+      <th style="min-width:110px">発注先（仕入先）</th>
+      <th style="width:90px">予定納期</th>
+      <th style="width:90px">実績完了日</th>
+      <th style="width:70px">ステータス</th>
+      <th style="min-width:100px">備考</th>
+      <th style="width:28px"></th>
+    </tr></thead><tbody id="process-tbody">`;
+
+  _processRows.forEach((r,i) => {
+    const facSelected = facOpts.replace(`value="${esc(r.factory_name)}"`,`value="${esc(r.factory_name)}" selected`);
+    const supSelected = supOpts.replace(`value="${esc(r.supplier_name)}"`,`value="${esc(r.supplier_name)}" selected`);
+    html += `<tr data-idx="${i}">
+      <td style="text-align:center"><input type="checkbox" class="process-chk" data-idx="${i}" style="width:14px;height:14px"></td>
+      <td><input type="number" data-p="${i}" data-f="seq" value="${i+1}" style="width:36px;text-align:center;border:none;background:transparent;font-size:12px"></td>
+      <td><input type="text" data-p="${i}" data-f="process_name" value="${esc(r.process_name||'')}" placeholder="裁断・刺繍・縫製" style="min-width:80px"></td>
+      <td><select data-p="${i}" data-f="process_type" style="font-size:11px;width:100%">
+        ${PROCESS_TYPES.map(t=>`<option value="${t}" ${r.process_type===t?'selected':''}>${t}</option>`).join('')}
+      </select></td>
+      <td><input type="text" data-p="${i}" data-f="factory_s" placeholder="絞り込み..." oninput="filterProcFactory(${i})" style="margin-bottom:3px;font-size:11px">
+          <select data-p="${i}" data-f="factory_name" style="font-size:11px;width:100%" onchange="autoFillSupplier(${i})">${facSelected}</select>
+      </td>
+      <td><select data-p="${i}" data-f="supplier_name" style="font-size:11px;width:100%">${supSelected}</select></td>
+      <td><input type="date" data-p="${i}" data-f="planned_date" value="${esc(r.planned_date||'')}" style="font-size:11px;width:100%"></td>
+      <td><input type="date" data-p="${i}" data-f="actual_date"  value="${esc(r.actual_date||'')}"  style="font-size:11px;width:100%"></td>
+      <td><select data-p="${i}" data-f="status" style="font-size:11px;width:100%">
+        ${Object.entries(PROCESS_STATUS).map(([v,l])=>`<option value="${v}" ${r.status===v?'selected':''}>${l}</option>`).join('')}
+      </select></td>
+      <td><input type="text" data-p="${i}" data-f="memo" value="${esc(r.memo||'')}" placeholder="備考"></td>
+      <td><button class="del-btn" onclick="delProcessRow(${i})">✕</button></td>
+    </tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+  document.getElementById('fs-body').innerHTML = html;
+}
+
+function filterProcFactory(idx) {
+  const q = (document.querySelector(`[data-p="${idx}"][data-f="factory_s"]`)?.value||'').toLowerCase();
+  const sel = document.querySelector(`[data-p="${idx}"][data-f="factory_name"]`); if(!sel) return;
+  Array.from(sel.options).forEach(opt => { opt.style.display = !q||opt.text.toLowerCase().includes(q)?'':'none'; });
+}
+
+function autoFillSupplier(idx) {
+  const facName = document.querySelector(`[data-p="${idx}"][data-f="factory_name"]`)?.value||'';
+  const fac = _masters.factories.find(f=>f.factory_name===facName);
+  if(fac && fac.supplier_name) {
+    const supSel = document.querySelector(`[data-p="${idx}"][data-f="supplier_name"]`);
+    if(supSel) supSel.value = fac.supplier_name;
+  }
+}
+
+function toggleAllProcess(chk) {
+  document.querySelectorAll('.process-chk').forEach(c=>{ c.checked=chk.checked; });
+}
+
+function addProcessRow() {
+  _processRows.push({seq:_processRows.length+1,process_name:'',process_type:'縫製',factory_name:'',supplier_name:'',planned_date:'',actual_date:'',status:'pending',memo:''});
+  renderProcessTable();
+}
+function delProcessRow(idx) { _processRows.splice(idx,1); renderProcessTable(); }
+
+function getProcessField(idx, field) {
+  const el = document.querySelector(`[data-p="${idx}"][data-f="${field}"]`); return el?el.value:'';
+}
+
+async function saveProcesses() {
+  const rows = _processRows.map((_,i)=>({
+    seq: i+1,
+    process_name:    getProcessField(i,'process_name'),
+    process_type:    getProcessField(i,'process_type'),
+    factory_name:    getProcessField(i,'factory_name'),
+    supplier_name:   getProcessField(i,'supplier_name'),
+    planned_date:    getProcessField(i,'planned_date'),
+    actual_date:     getProcessField(i,'actual_date'),
+    status:          getProcessField(i,'status'),
+    memo:            getProcessField(i,'memo'),
+  })).filter(r=>r.process_name||r.factory_name);
+  const res = await api('processes.save', {style_code:_currentProduct.style_code, rows});
+  if(!res||!res.ok) { toast('保存失敗','error'); return; }
+  toast('工程を保存しました','success');
+}
+
+// ===== 資材シートから資材マスタ登録ポップアップ =====
+function openMatMasterPopup(defaultName, defaultNo) {
+  const supOpts = '<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}">${esc(s.supplier_name)}</option>`).join('');
+  const ov = document.createElement('div');
+  ov.id = 'mat-master-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:16px">🧵 資材マスタに登録</h3>
+    <div class="form-row form-row-2 mb-3">
+      <div class="form-group"><label>分類</label><select id="mp-cat">${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
+      <div class="form-group"><label>品番</label><input type="text" id="mp-no" value="${esc(defaultNo||'')}"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:10px"><label>品名 ★</label><input type="text" id="mp-name" value="${esc(defaultName||'')}"></div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div class="form-group"><label>規格</label><input type="text" id="mp-spec"></div>
+      <div class="form-group"><label>品質・組成</label><input type="text" id="mp-quality"></div>
+    </div>
+    <div class="form-row form-row-3" style="margin-bottom:10px">
+      <div class="form-group"><label>単位</label><select id="mp-unit">${UNITS.map(u=>`<option value="${u}">${u}</option>`).join('')}</select></div>
+      <div class="form-group"><label>単価（円）</label><input type="number" id="mp-price" placeholder="0"></div>
+      <div class="form-group"><label>仕入先</label><select id="mp-sup">${supOpts}</select></div>
+    </div>
+    <div class="form-group" style="margin-bottom:14px"><label>メーカー名</label><input type="text" id="mp-maker"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="document.getElementById('mat-master-ov').remove()">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveMatMasterFromPopup()">資材マスタに登録</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', e=>{ if(e.target===ov) ov.remove(); });
+}
+
+async function saveMatMasterFromPopup() {
+  const g = id => document.getElementById(id)?.value||'';
+  if(!g('mp-name')) { toast('品名を入力してください','error'); return; }
+  const res = await api('materials.upsert',{
+    category:g('mp-cat'), product_no:g('mp-no'), product_name:g('mp-name'),
+    spec:g('mp-spec'), quality:g('mp-quality'), unit:g('mp-unit'),
+    unit_price:parseFloat(g('mp-price'))||0, supplier_name:g('mp-sup'), maker_name:g('mp-maker')
+  });
+  if(!res||!res.ok) { toast('保存失敗','error'); return; }
+  toast('資材マスタに登録しました','success');
+  const m = await api('materials.list'); if(m) _masters.materials=m.items;
+  document.getElementById('mat-master-ov').remove();
+}
+
+// ===== PDF出力（ブラウザ印刷方式） =====
+function openPrintWindow(html, title) {
+  const win = window.open('','_blank','width=900,height=700');
+  win.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+    <title>${title}</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:Arial,'Hiragino Sans',sans-serif;font-size:9pt;color:#000;background:#fff}
+      @page{margin:12mm 10mm}
+      @media print{.no-print{display:none}.page-break{page-break-before:always}}
+      table{border-collapse:collapse;width:100%}
+      th{background:#1B2A4A;color:#fff;padding:4pt 5pt;text-align:left;font-size:8pt;white-space:nowrap}
+      td{padding:3pt 5pt;border-bottom:0.5pt solid #ddd;vertical-align:top;font-size:8.5pt}
+      tr:nth-child(even) td{background:#F7F6F3}
+      .header{display:flex;justify-content:space-between;border-bottom:2pt solid #1B2A4A;padding-bottom:6pt;margin-bottom:10pt}
+      .logo{font-size:16pt;font-weight:700;color:#1B2A4A}.logo span{color:#2B5CE6}
+      .doc-title{font-size:13pt;font-weight:700;text-align:right;color:#1B2A4A}
+      .doc-no{font-size:8pt;color:#888;text-align:right;margin-top:2pt}
+      .sec-title{font-size:7.5pt;font-weight:700;color:#2B5CE6;border-bottom:0.5pt solid #2B5CE6;padding-bottom:2pt;margin:8pt 0 4pt;letter-spacing:0.05em}
+      .grid2{display:grid;grid-template-columns:1fr 90pt;gap:10pt;margin-bottom:8pt}
+      .info-row{display:flex;gap:4pt;margin-bottom:2pt;font-size:8.5pt}
+      .lbl{color:#888;min-width:60pt;flex-shrink:0}.val{font-weight:500}
+      .photo-box{width:88pt;height:108pt;border:0.5pt solid #ddd;border-radius:3pt;display:flex;align-items:center;justify-content:center;font-size:24pt;color:#ccc}
+      .sign-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10pt;margin-top:10pt}
+      .sign-box{border-top:0.5pt solid #888;padding-top:3pt;font-size:7.5pt;color:#888;text-align:center;height:28pt}
+      .footer{border-top:0.5pt solid #ddd;padding-top:5pt;margin-top:10pt;display:flex;justify-content:space-between;font-size:7.5pt;color:#888}
+      .total-row td{background:#EEF2FD!important;color:#2B5CE6;font-weight:700}
+      .badge{display:inline-block;padding:1pt 5pt;border-radius:3pt;font-size:7.5pt}
+      .print-btn{position:fixed;top:10px;right:10px;background:#2B5CE6;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px}
+    </style>
+  </head><body>
+  <button class="print-btn no-print" onclick="window.print()">🖨️ 印刷・PDF保存</button>
+  ${html}
+  </body></html>`);
+  win.document.close();
+}
+
+// ① 縫製仕様書_資材表
+async function pdfSpec() {
+  document.getElementById('pdf-menu').style.display='none';
+  const p = _currentProduct;
+  const matRes = await api('product_materials.get', {style_code:p.style_code});
+  const mats = matRes?.items||[];
+  const colors = _productColors.filter(c=>c.code);
+
+  const colHeaders = colors.map((c,i)=>`<th style="width:38pt">Col.${i+1}<br><small style="font-size:7pt">${esc(c.code)}</small></th>`).join('');
+  const imgHtml = p.image_url_1 ? `<img src="${esc(p.image_url_1)}" style="width:100%;height:100%;object-fit:cover">` : '📷';
+
+  // 行を生成
+  const rowsHtml = mats.map((m,i)=>{
+    const colCells = colors.map((c,ci)=>`<td style="text-align:center">${esc(m['color'+(ci+1)+'_code']||'')}${m['color'+(ci+1)+'_name']?'<br><small style="font-size:7pt">'+esc(m['color'+(ci+1)+'_name'])+'</small>':''}</td>`).join('');
+    return `<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td>${esc(m.category||'')}</td>
+      <td style="font-family:monospace;font-size:8pt">${esc(m.product_no||'')}</td>
+      <td style="min-width:120pt">${esc(m.product_name||'')}</td>
+      <td>${esc(m.spec||'')}</td>
+      <td>${esc(m.maker_name||m.supplier_name||'')}</td>
+      <td>${esc(m.usage_location||'')}</td>
+      <td style="text-align:right">${esc(m.usage_quantity||'')}</td>
+      <td>${esc(m.unit||'')}</td>
+      ${colCells}
+      <td>${esc(m.memo||'')}</td>
+    </tr>`;
+  });
+
+  // 1ページあたり15行で分割
+  const perPage = 15;
+  let pages = '';
+  for(let page=0; page*perPage<mats.length; page++) {
+    const isFirst = page===0;
+    const slice = rowsHtml.slice(page*perPage, (page+1)*perPage);
+    const pageNum = `${page+1} / ${Math.ceil(mats.length/perPage)}`;
+    pages += `${page>0?'<div class="page-break"></div>':''}
+    <div class="header">
+      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd.</div></div>
+      <div><div class="doc-title">縫製仕様書_資材表${page>0?' （続き）':''}</div>
+      <div class="doc-no">${esc(p.brand_product_no||'')} / ${esc(p.style_code)} / ${new Date().toLocaleDateString('ja-JP')}</div></div>
+    </div>
+    ${isFirst ? `<div class="grid2" style="margin-bottom:10pt">
+      <div>
+        <div class="sec-title">製品情報</div>
+        <div class="info-row"><span class="lbl">お客様品番：</span><span class="val" style="font-size:11pt;font-weight:700;color:#1B2A4A">${esc(p.brand_product_no||'')}</span></div>
+        <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
+        <div class="info-row"><span class="lbl">ブランド：</span><span class="val">${esc(p.brand||'')}</span></div>
+        <div class="info-row"><span class="lbl">取引先：</span><span class="val">${esc(p.client_name||'')}</span></div>
+        <div class="info-row"><span class="lbl">年度/シーズン：</span><span class="val">${esc(p.year||'')} / ${esc(p.season||'')}</span></div>
+        <div class="info-row"><span class="lbl">サイズ：</span><span class="val">${esc(p.size_range||'')}</span></div>
+        <div class="info-row"><span class="lbl">縫製工場：</span><span class="val">${esc(p.factory_name||'')}</span></div>
+        <div class="info-row"><span class="lbl">納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(p.delivery_date||'')}</span></div>
+      </div>
+      <div><div class="photo-box">${p.image_url_1?`<img src="${esc(p.image_url_1)}" style="width:88pt;height:108pt;object-fit:cover;border-radius:3pt">`:'📷'}</div>
+      <div style="font-size:7pt;color:#888;text-align:center;margin-top:2pt">製品写真</div></div>
+    </div>` : ''}
+    <div class="sec-title">資材明細${page>0?' （続き）':''}</div>
+    <table>
+      <thead><tr>
+        <th style="width:16pt">No.</th><th style="width:36pt">分類</th>
+        <th style="width:56pt">品番</th><th>品名</th>
+        <th style="width:46pt">規格</th><th style="width:50pt">メーカー</th>
+        <th style="width:46pt">使用箇所</th><th style="width:28pt;text-align:right">要尺</th><th style="width:18pt">単位</th>
+        ${colHeaders}
+        <th>備考</th>
+      </tr></thead>
+      <tbody>${slice.join('')}</tbody>
+    </table>
+    ${isFirst&&mats.length<=perPage ? `<div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>` : ''}
+    <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書</span><span>${pageNum}</span></div>`;
+  }
+  openPrintWindow(pages, '縫製仕様書_資材表');
+}
+
+// ② 製品情報シート（発注書兼用）
+async function pdfProductSheet() {
+  document.getElementById('pdf-menu').style.display='none';
+  const p = _currentProduct;
+  const qtyRes = await api('order_qty.get', {style_code:p.style_code});
+  const qtyRows = qtyRes?.items||[];
+  const colors = _productColors.filter(c=>c.code);
+  const sizes  = (p.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+
+  // 発注数量テーブル
+  let qtyHtml = '';
+  if(colors.length && sizes.length) {
+    const qtyMap = {};
+    qtyRows.forEach(r=>{ if(!qtyMap[r.color_code]) qtyMap[r.color_code]={}; qtyMap[r.color_code][r.size_name]=Number(r.quantity)||0; });
+    const colTotals = {}; sizes.forEach(s=>colTotals[s]=0);
+    let grand=0;
+    const qRows = colors.map(c=>{
+      let rowTotal=0;
+      const cells = sizes.map(s=>{ const v=(qtyMap[c.code]||{})[s]||0; rowTotal+=v; colTotals[s]+=v; grand+=v; return `<td style="text-align:right">${v||''}</td>`; }).join('');
+      return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700">${rowTotal}</td></tr>`;
+    }).join('');
+    const totCells = sizes.map(s=>`<td style="text-align:right;font-weight:700;color:#2B5CE6">${colTotals[s]}</td>`).join('');
+    qtyHtml = `<div class="sec-title">発注数量（カラー × サイズ）</div>
+    <table><thead><tr><th>カラー</th>${sizes.map(s=>`<th style="text-align:right">${esc(s)}</th>`).join('')}<th style="text-align:right">合計</th></tr></thead>
+    <tbody>${qRows}<tr class="total-row"><td style="font-weight:700">合計</td>${totCells}<td style="text-align:right;font-weight:700;font-size:11pt">${grand}</td></tr></tbody></table>`;
+  }
+
+  const colorBadges = colors.map((c,i)=>`<span style="background:#F7F6F3;border:0.5pt solid #ddd;border-radius:3pt;padding:2pt 6pt;font-size:8pt;margin-right:4pt">Col.${i+1} ${esc(c.code)} ${esc(c.name)}</span>`).join('');
+
+  const html = `<div class="header">
+    <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd.</div></div>
+    <div><div class="doc-title">製 品 情 報 シ ー ト</div><div class="doc-no">出力日：${new Date().toLocaleDateString('ja-JP')}</div></div>
+  </div>
+  <div class="grid2">
+    <div>
+      <div class="sec-title">基本情報</div>
+      <div class="info-row"><span class="lbl">お客様品番：</span><span class="val" style="font-size:12pt;font-weight:700;color:#1B2A4A">${esc(p.brand_product_no||'')}</span></div>
+      <div class="info-row"><span class="lbl">品名（日）：</span><span class="val">${esc(p.product_name||'')}</span></div>
+      <div class="info-row"><span class="lbl">品名（英）：</span><span class="val">${esc(p.product_name_en||'')}</span></div>
+      <div class="info-row"><span class="lbl">ブランド：</span><span class="val">${esc(p.brand||'')}</span></div>
+      <div class="info-row"><span class="lbl">取引先：</span><span class="val">${esc(p.client_name||'')}</span></div>
+      <div class="info-row"><span class="lbl">年度/シーズン：</span><span class="val">${esc(p.year||'')} / ${esc(p.season||'')}</span></div>
+      <div class="info-row"><span class="lbl">サイズ展開：</span><span class="val">${esc(p.size_range||'')}</span></div>
+      <div class="info-row"><span class="lbl">原産国：</span><span class="val">${esc(p.country_of_origin||'')}</span></div>
+      <div class="info-row"><span class="lbl">縫製工場：</span><span class="val">${esc(p.factory_name||'')}</span></div>
+      <div class="info-row"><span class="lbl">製品納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(p.delivery_date||'')}</span></div>
+      <div class="info-row"><span class="lbl">パタンナー：</span><span class="val">${esc(p.patternmaker||'')}</span></div>
+      <div class="info-row"><span class="lbl">パターンNo.：</span><span class="val">${esc(p.pattern_no||'')}</span></div>
+      <div class="info-row"><span class="lbl">社内コード：</span><span class="val" style="font-family:monospace;font-size:8pt">${esc(p.style_code||'')}</span></div>
+    </div>
+    <div>
+      <div class="photo-box">${p.image_url_1?`<img src="${esc(p.image_url_1)}" style="width:88pt;height:108pt;object-fit:cover;border-radius:3pt">`:'📷'}</div>
+      <div style="font-size:7pt;color:#888;text-align:center;margin-top:2pt">製品写真</div>
+    </div>
+  </div>
+  <div class="sec-title">製品カラー</div>
+  <div style="margin-bottom:8pt">${colorBadges}</div>
+  ${qtyHtml}
+  <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+  <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書</span><span>1 / 1</span></div>`;
+  openPrintWindow(html, '製品情報シート_'+p.brand_product_no);
+}
+
+// ③ 加工発注書（チェックした工程をまとめて発注先別に）
+async function pdfProcessOrder() {
+  document.getElementById('pdf-menu').style.display='none';
+  // 工程タブが開いていない場合はデータを取得
+  if(!_processRows.length) {
+    const res = await api('processes.get', {style_code:_currentProduct.style_code});
+    _processRows = res?.items||[];
+  }
+  const checked = Array.from(document.querySelectorAll('.process-chk:checked')).map(c=>Number(c.dataset.idx));
+  if(!checked.length) { toast('工程タブでチェックを入れてください','error'); return; }
+
+  const selected = checked.map(i=>({
+    ...(_processRows[i]||{}),
+    process_name: getProcessField(i,'process_name')||_processRows[i]?.process_name||'',
+    supplier_name:getProcessField(i,'supplier_name')||_processRows[i]?.supplier_name||'',
+    factory_name: getProcessField(i,'factory_name')||_processRows[i]?.factory_name||'',
+    planned_date: getProcessField(i,'planned_date')||_processRows[i]?.planned_date||'',
+  }));
+
+  // 発注先でグループ化
+  const groups = {};
+  selected.forEach(r=>{
+    const key = r.supplier_name||r.factory_name||'直取引';
+    if(!groups[key]) groups[key]={supplier:r.supplier_name||r.factory_name, factory:r.factory_name, processes:[]};
+    groups[key].processes.push(r);
+  });
+
+  // 発注数量取得
+  const qtyRes = await api('order_qty.get', {style_code:_currentProduct.style_code});
+  const qtyRows = qtyRes?.items||[];
+  const colors = _productColors.filter(c=>c.code);
+  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+  const qtyMap = {};
+  qtyRows.forEach(r=>{ if(!qtyMap[r.color_code]) qtyMap[r.color_code]={}; qtyMap[r.color_code][r.size_name]=Number(r.quantity)||0; });
+
+  const p = _currentProduct;
+  let pages = '';
+  let pageIdx = 0;
+  const totalPages = Object.keys(groups).length;
+
+  for(const [supKey, group] of Object.entries(groups)) {
+    // 発注番号採番
+    const noRes = await api('order_no.generate', {type:'S'});
+    const orderNo = noRes?.order_no||'RL-S-??????';
+
+    // 発注数量テーブル（カラー単価入力欄付き）
+    let qtyHtml='', grandTotal=0;
+    if(colors.length && sizes.length) {
+      const colTotals={}; sizes.forEach(s=>colTotals[s]=0);
+      const qRows = colors.map(c=>{
+        let rowTotal=0;
+        const cells=sizes.map(s=>{ const v=(qtyMap[c.code]||{})[s]||0; rowTotal+=v; colTotals[s]+=v; grandTotal+=v; return `<td style="text-align:right">${v||''}</td>`; }).join('');
+        return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700">${rowTotal}</td><td style="text-align:right">___円</td></tr>`;
+      }).join('');
+      const totCells=sizes.map(s=>`<td style="text-align:right;font-weight:700;color:#2B5CE6">${colTotals[s]}</td>`).join('');
+      qtyHtml=`<table><thead><tr><th>カラー</th>${sizes.map(s=>`<th style="text-align:right">${esc(s)}</th>`).join('')}<th style="text-align:right">合計</th><th style="text-align:right">工賃単価</th></tr></thead>
+      <tbody>${qRows}<tr class="total-row"><td>合計</td>${totCells}<td style="text-align:right;font-weight:700;font-size:11pt">${grandTotal}</td><td></td></tr></tbody></table>`;
+    }
+
+    const processNames = group.processes.map(r=>r.process_name).join('・');
+    const plannedDate = group.processes.map(r=>r.planned_date).filter(Boolean).sort().pop()||'';
+
+    // 履歴保存
+    await api('order_history.save', {
+      order_no:orderNo, order_type:'加工発注', style_code:p.style_code,
+      supplier_name:group.supplier, process_names:processNames,
+      total_qty:grandTotal, memo:''
+    });
+
+    pages += `${pageIdx>0?'<div class="page-break"></div>':''}
+    <div class="header">
+      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. 京都市右京区</div></div>
+      <div><div class="doc-title">加 工 発 注 書</div>
+      <div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd;font-size:8.5pt">
+      <div class="info-row"><span class="lbl">発注先：</span><span class="val" style="font-weight:700;font-size:11pt">${esc(group.supplier)}</span></div>
+      <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
+      <div class="info-row"><span class="lbl">納品先：</span><span class="val">${esc(group.factory)} ${group.factory!==group.supplier?'（作業場所）':''}</span></div>
+      <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
+      <div class="info-row"><span class="lbl">加工内容：</span><span class="val" style="color:#2B5CE6;font-weight:700">${esc(processNames)}</span></div>
+      <div class="info-row"><span class="lbl">納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(plannedDate)}</span></div>
+    </div>
+    <div class="sec-title">発注数量・工賃</div>
+    ${qtyHtml}
+    <div style="margin-top:10pt">
+      <div class="sec-title">備考・指示事項</div>
+      <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;min-height:36pt;font-size:8.5pt;color:#888">（指示事項）</div>
+    </div>
+    <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+    <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書 / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
+    pageIdx++;
+  }
+  openPrintWindow(pages, '加工発注書_'+p.brand_product_no);
+  toast('発注書を発行しました（履歴保存済）','success');
+}
+
+// ④ 工程表
+async function pdfProcessSheet() {
+  document.getElementById('pdf-menu').style.display='none';
+  if(!_processRows.length) {
+    const res = await api('processes.get', {style_code:_currentProduct.style_code});
+    _processRows = res?.items||[];
+  }
+  const p = _currentProduct;
+  const statusColor = {pending:'#888', in_progress:'#B05C00', completed:'#0F6E56', cancelled:'#CC2A2A'};
+  const statusBg    = {pending:'#F7F6F3', in_progress:'#FFF3E0', completed:'#E1F5EE', cancelled:'#FEF2F2'};
+
+  const rows = _processRows.map((r,i)=>{
+    const s=r.status||'pending';
+    return `<tr>
+      <td style="text-align:center">${r.seq||i+1}</td>
+      <td><strong>${esc(r.process_name||'')}</strong></td>
+      <td>${esc(r.process_type||'')}</td>
+      <td>${esc(r.factory_name||'')}</td>
+      <td>${esc(r.supplier_name||'')}${r.supplier_name&&r.supplier_name!==r.factory_name?'<br><small style="color:#888">（間接取引）</small>':r.factory_name?'<br><small style="color:#888">（直取引）</small>':''}</td>
+      <td style="font-size:7.5pt">${esc(r.factory_address||'')}</td>
+      <td>${esc(r.planned_date||'')}</td>
+      <td>${esc(r.actual_date||'')}</td>
+      <td><span style="background:${statusBg[s]};color:${statusColor[s]};padding:1pt 5pt;border-radius:3pt;font-size:7.5pt;font-weight:700">${PROCESS_STATUS[s]||s}</span></td>
+      <td style="font-size:8pt">${esc(r.memo||'')}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<div class="header">
+    <div><div class="logo">RL <span>OMS</span></div></div>
+    <div><div class="doc-title">工 程 表</div><div class="doc-no">${esc(p.brand_product_no||'')} / ${new Date().toLocaleDateString('ja-JP')}</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:2pt 16pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd;font-size:8.5pt">
+    <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
+    <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
+    <div class="info-row"><span class="lbl">縫製工場：</span><span class="val">${esc(p.factory_name||'')}</span></div>
+    <div class="info-row"><span class="lbl">最終納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(p.delivery_date||'')}</span></div>
+  </div>
+  <table>
+    <thead><tr>
+      <th style="width:18pt">順</th><th style="min-width:56pt">工程名</th>
+      <th style="width:44pt">種別</th><th style="min-width:70pt">加工場（実作業）</th>
+      <th style="min-width:70pt">発注先（仕入先）</th><th style="min-width:60pt">住所</th>
+      <th style="width:54pt">予定納期</th><th style="width:54pt">実績完了日</th>
+      <th style="width:42pt">状態</th><th>備考</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+  <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書</span><span>1 / 1</span></div>`;
+  openPrintWindow(html, '工程表_'+p.brand_product_no);
 }
 
 // ===== マスタ管理 =====
