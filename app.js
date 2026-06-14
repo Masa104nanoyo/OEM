@@ -359,8 +359,12 @@ function renderProductForm(p) {
   const supOpts = '<option value="">-- 選択 --</option>'+
     _masters.customers.map(c=>`<option value="${esc(c.customer_id||'')}" ${p?.client_id===c.customer_id?'selected':''}>${esc(c.customer_name)}${c.brand_name?' / '+esc(c.brand_name):''}</option>`).join('');
 
+  // 加工場は partners から is_factory のものを使う（後方互換）
+  const facList = _masters.factories.length ? _masters.factories :
+    _masters.partners.filter(x=>x.is_factory===true||x.is_factory==='TRUE');
+  const facName = (f) => f.factory_name||f.partner_name||'';
   const facOpts = '<option value="">-- 選択 --</option>'+
-    _masters.factories.map(f=>`<option value="${esc(f.factory_name||'')}" ${p?.factory_name===f.factory_name?'selected':''}>${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('');
+    facList.map(f=>`<option value="${esc(facName(f))}" ${p?.factory_name===facName(f)?'selected':''}>${esc(facName(f))}${f.process_type?' ('+esc(f.process_type)+')':f.category?' ('+esc(f.category)+')':''}</option>`).join('');
 
   const colorSelRows = _productColors.map((c,i)=>{
     const opts = '<option value="">-- 選択 --</option>'+
@@ -385,9 +389,16 @@ function renderProductForm(p) {
       <div class="form-row form-row-2">
         <div class="form-group"><label>ブランド</label><input type="text" id="f-brand" value="${esc(p?.brand||'')}"></div>
         <div class="form-group"><label>取引先</label>
+          ${_masters.customers.length > 0 ? `
           <input type="text" placeholder="取引先を絞り込み..." oninput="filterClientSel(this)" style="margin-bottom:4px;font-size:12px">
           <select id="f-client-sel" onchange="onClientSel(this)" size="3" style="width:100%;font-size:12px">${supOpts}</select>
           <input type="hidden" id="f-client-id" value="${esc(p?.client_id||'')}">
+          ` : `
+          <input type="text" id="f-client-free" value="${esc(p?.client_name||p?.client_id||'')}" placeholder="取引先名を入力（得意先マスタに登録すると選択式になります）">
+          <input type="hidden" id="f-client-id" value="${esc(p?.client_id||'')}">
+          <input type="hidden" id="f-client-sel" value="">
+          <p style="font-size:10px;color:var(--c-text3);margin-top:4px">💡 マスタ管理→得意先から登録できます</p>
+          `}
         </div>
       </div>
       <div class="form-row form-row-3">
@@ -429,11 +440,16 @@ function renderProductForm(p) {
       <div class="form-row form-row-2">
         <div class="form-group"><label>サンプルNo.</label><input type="text" id="f-sample-no" value="${esc(p?.sample_no||'')}"></div>
         <div class="form-group"><label>縫製工場</label>
+          ${facList.length > 0 ? `
           <input type="text" id="f-factory-search" placeholder="工場名で絞り込み..." oninput="filterFactory()" style="margin-bottom:4px">
           <select id="f-factory" size="4" style="width:100%;font-size:12px">
             <option value="">-- 選択 --</option>
-            ${_masters.factories.map(f=>`<option value="${esc(f.factory_name)}" ${p?.factory_name===f.factory_name?'selected':''}>${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('')}
+            ${facList.map(f=>`<option value="${esc(facName(f))}" ${p?.factory_name===facName(f)?'selected':''}>${esc(facName(f))}${f.process_type?' ('+esc(f.process_type)+')':f.category?' ('+esc(f.category)+')':''}</option>`).join('')}
           </select>
+          ` : `
+          <input type="text" id="f-factory" value="${esc(p?.factory_name||'')}" placeholder="工場名を入力（仕入/加工先マスタに登録すると選択式になります）">
+          <p style="font-size:10px;color:var(--c-text3);margin-top:4px">💡 マスタ管理→仕入/加工先から加工先として登録できます</p>
+          `}
         </div>
       </div>
       <div class="form-row form-row-2">
@@ -551,7 +567,7 @@ function collectProductForm() {
     product_name:      g('f-name-ja'),
     product_name_en:   g('f-name-en'),
     brand:             g('f-brand'),
-    client_id:         g('f-client-id'),
+    client_id:         document.getElementById('f-client-id')?.value || document.getElementById('f-client-free')?.value||'',
     item_code:         g('f-item'),
     item_name:         ITEMS.find(i=>i.code===g('f-item'))?.name||'',
     year:              g('f-year'),
@@ -561,7 +577,7 @@ function collectProductForm() {
     patternmaker:      g('f-patternmaker'),
     pattern_no:        g('f-pattern-no'),
     sample_no:         g('f-sample-no'),
-    factory_name:      g('f-factory'),
+    factory_name:      (()=>{ const el=document.getElementById('f-factory'); return el?el.value:''; })(),
     delivery_date:     g('f-delivery'),
     status:            g('f-status'),
     memo:              g('f-memo'),
@@ -804,7 +820,38 @@ async function saveMaterialsData() {
   toast('資材シートを保存しました','success');
 }
 
-// ===== 発注数量タブ =====
+// ===== 郵便番号自動入力 =====
+async function lookupZip(zipFieldId, addrFieldId) {
+  const zip = (document.getElementById(zipFieldId)?.value||'').replace(/[^0-9]/g,'');
+  if(zip.length !== 7) { toast('郵便番号は7桁で入力してください','error'); return; }
+  showLoading(true);
+  try {
+    const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${zip}`);
+    const data = await res.json();
+    showLoading(false);
+    if(data.results && data.results.length > 0) {
+      const r = data.results[0];
+      const addr = r.address1 + r.address2 + r.address3;
+      const el = document.getElementById(addrFieldId);
+      if(el) el.value = addr;
+      toast('住所を自動入力しました','success');
+    } else {
+      toast('住所が見つかりませんでした','error');
+    }
+  } catch(e) {
+    showLoading(false);
+    toast('郵便番号検索に失敗しました','error');
+  }
+}
+
+function zipInput(zipId, addrId) {
+  return `<div style="display:flex;gap:6px;align-items:center">
+    <input type="text" id="${zipId}" placeholder="例: 6158520" maxlength="8" style="flex:1"
+      oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+      onkeydown="if(event.key==='Enter'){lookupZip('${zipId}','${addrId}');event.preventDefault()}">
+    <button class="btn btn-secondary btn-sm" type="button" onclick="lookupZip('${zipId}','${addrId}')">住所検索</button>
+  </div>`;
+}
 let _orderQtyData = {}; // {color_code: {size_name: qty}}
 
 async function renderOrderQtyTab() {
@@ -900,8 +947,17 @@ async function renderProcessesTab() {
 }
 
 function renderProcessTable() {
-  const facOpts = '<option value="">-- 選択 --</option>'+_masters.factories.map(f=>`<option value="${esc(f.factory_name)}">${esc(f.factory_name)}${f.process_type?' ('+esc(f.process_type)+')':''}</option>`).join('');
-  const supOpts = '<option value="">-- 選択 --</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}">${esc(s.supplier_name)}</option>`).join('');
+  // 加工場リスト（partnersのis_factoryまたはfactoriesから）
+  const facList = _masters.factories.length ? _masters.factories :
+    _masters.partners.filter(x=>x.is_factory===true||x.is_factory==='TRUE');
+  const getFacName = f => f.factory_name||f.partner_name||'';
+  const getSupName = f => f.supplier_name||f.payment_partner_name||'';
+
+  const facOpts = '<option value="">-- 選択 --</option>'+
+    facList.map(f=>`<option value="${esc(getFacName(f))}">${esc(getFacName(f))}${f.process_type?' ('+esc(f.process_type)+')':f.category?' ('+esc(f.category)+')':''}</option>`).join('');
+  const supOpts = '<option value="">-- 選択 --</option>'+
+    (_masters.suppliers.length ? _masters.suppliers : _masters.partners.filter(x=>x.is_supplier===true||x.is_supplier==='TRUE'))
+    .map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}">${esc(s.partner_name||s.supplier_name)}</option>`).join('');
 
   let html = `<div class="section-card">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
@@ -934,8 +990,9 @@ function renderProcessTable() {
       <td><select data-p="${i}" data-f="process_type" style="font-size:11px;width:100%">
         ${PROCESS_TYPES.map(t=>`<option value="${t}" ${r.process_type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
-      <td><input type="text" data-p="${i}" data-f="factory_s" placeholder="絞り込み..." oninput="filterProcFactory(${i})" style="margin-bottom:3px;font-size:11px">
-          <select data-p="${i}" data-f="factory_name" style="font-size:11px;width:100%" onchange="autoFillSupplier(${i})">${facSelected}</select>
+      <td>
+        <input type="text" data-p="${i}" data-f="factory_s" placeholder="絞り込み..." oninput="filterProcFactory(${i})" style="margin-bottom:3px;font-size:11px;width:100%">
+        <select data-p="${i}" data-f="factory_name" style="font-size:11px;width:100%" onchange="autoFillSupplier(${i})">${facSelected}</select>
       </td>
       <td><select data-p="${i}" data-f="supplier_name" style="font-size:11px;width:100%">${supSelected}</select></td>
       <td><input type="date" data-p="${i}" data-f="planned_date" value="${esc(r.planned_date||'')}" style="font-size:11px;width:100%"></td>
@@ -959,10 +1016,13 @@ function filterProcFactory(idx) {
 
 function autoFillSupplier(idx) {
   const facName = document.querySelector(`[data-p="${idx}"][data-f="factory_name"]`)?.value||'';
-  const fac = _masters.factories.find(f=>f.factory_name===facName);
-  if(fac && fac.supplier_name) {
+  const allFac = _masters.factories.length ? _masters.factories :
+    _masters.partners.filter(x=>x.is_factory===true||x.is_factory==='TRUE');
+  const fac = allFac.find(f=>(f.factory_name||f.partner_name)===facName);
+  if(fac) {
+    const supName = fac.supplier_name||fac.payment_partner_name||'';
     const supSel = document.querySelector(`[data-p="${idx}"][data-f="supplier_name"]`);
-    if(supSel) supSel.value = fac.supplier_name;
+    if(supSel && supName) supSel.value = supName;
   }
 }
 
@@ -1063,8 +1123,9 @@ async function saveMatMasterFromPopup() {
   });
   if(!res||!res.ok) { toast('保存失敗','error'); return; }
   toast('資材マスタに登録しました','success');
-  const m = await api('materials.list'); if(m) _masters.materials=m.items;
   document.getElementById('mat-master-ov').remove();
+  // バックグラウンドで更新（UIをブロックしない）
+  api('materials.list').then(m=>{ if(m) _masters.materials=m.items; });
 }
 
 // ===== PDF出力（ブラウザ印刷方式） =====
@@ -1538,6 +1599,7 @@ function openPartnerForm(idx) {
       <div class="form-group"><label>FAX</label><input type="text" id="pt-fax" value="${esc(p?.fax||'')}"></div>
       <div class="form-group"><label>メール</label><input type="text" id="pt-email" value="${esc(p?.email||'')}"></div>
     </div>
+    <div class="form-group"><label>郵便番号</label>${zipInput('pt-zip','pt-addr')}</div>
     <div class="form-group"><label>住所</label><input type="text" id="pt-addr" value="${esc(p?.address||'')}"></div>
     <div class="form-group"><label>支払条件</label><input type="text" id="pt-pay-terms" value="${esc(p?.payment_terms||'')}"></div>
     <div class="form-group"><label>備考</label><textarea id="pt-memo">${esc(p?.memo||'')}</textarea></div>
@@ -1621,6 +1683,7 @@ function openCustomerForm(idx) {
       <div class="form-group"><label>FAX</label><input type="text" id="cu-fax" value="${esc(cu?.fax||'')}"></div>
       <div class="form-group"><label>メール</label><input type="text" id="cu-email" value="${esc(cu?.email||'')}"></div>
     </div>
+    <div class="form-group"><label>郵便番号</label>${zipInput('cu-zip','cu-addr')}</div>
     <div class="form-group"><label>住所</label><input type="text" id="cu-addr" value="${esc(cu?.address||'')}"></div>
     <div class="form-group"><label>備考</label><textarea id="cu-memo">${esc(cu?.memo||'')}</textarea></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
