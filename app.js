@@ -106,18 +106,23 @@ function showPage(name) {
 }
 
 // ===== Auth =====
-async function doLogin() {
+function doLogin() {
   const username = document.getElementById('l-user').value.trim();
   const password = document.getElementById('l-pass').value;
   if (!username || !password) return;
   const errEl = document.getElementById('l-error');
   errEl.style.display = 'none';
+
+  // JSONP方式でログイン
   showLoading(true);
-  try {
-    const payload = JSON.stringify({ action:'login', username, password });
-    const url     = GAS_URL + '?payload=' + encodeURIComponent(payload);
-    const res     = await fetch(url, { method:'GET' });
-    const data    = await res.json();
+  const cbName = 'rl_login_' + Date.now();
+  const payload = JSON.stringify({ action:'login', username, password });
+  const url = GAS_URL + '?payload=' + encodeURIComponent(payload) + '&callback=' + cbName;
+
+  window[cbName] = (data) => {
+    showLoading(false);
+    delete window[cbName];
+    document.getElementById('jsonp-' + cbName)?.remove();
     if (data.ok) {
       _token = data.token; _user = data.user;
       localStorage.setItem('rl_token', _token);
@@ -127,10 +132,28 @@ async function doLogin() {
       errEl.textContent = data.error || 'ログインに失敗しました';
       errEl.style.display = 'block';
     }
-  } catch (e) {
-    errEl.textContent = '通信エラー: ' + e.message;
+  };
+
+  const script = document.createElement('script');
+  script.id  = 'jsonp-' + cbName;
+  script.src = url;
+  script.onerror = () => {
+    showLoading(false);
+    delete window[cbName];
+    script.remove();
+    errEl.textContent = '通信エラーが発生しました。GASの設定を確認してください。';
     errEl.style.display = 'block';
-  } finally { showLoading(false); }
+  };
+  setTimeout(() => {
+    if (window[cbName]) {
+      showLoading(false);
+      delete window[cbName];
+      script.remove();
+      errEl.textContent = '通信タイムアウト';
+      errEl.style.display = 'block';
+    }
+  }, 30000);
+  document.head.appendChild(script);
 }
 async function doLogout() { await api('logout'); forceLogout(); }
 function forceLogout() {
