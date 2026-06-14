@@ -1735,6 +1735,7 @@ function openMatSearchPopup() {
   </div>`;
   document.body.appendChild(ov);
   ov.addEventListener('click',e=>{if(e.target===ov) ov.remove();});
+  _matPopupFiltered = _masters.materials;
   document.getElementById('msp-q')?.focus();
 }
 
@@ -1749,16 +1750,22 @@ function renderMatPopupList(items) {
     '<th style="padding:6px 8px;border-bottom:0.5px solid var(--c-border)">メーカー</th>'+
     '<th style="padding:6px 8px;text-align:right;border-bottom:0.5px solid var(--c-border)">単価</th>'+
     '</tr></thead><tbody>'+
-    items.map(m=>`<tr onclick="selectMatFromPopup(${JSON.stringify(JSON.stringify(m))})" style="cursor:pointer;border-bottom:0.5px solid var(--c-border)" onmouseover="this.style.background='var(--c-primary-bg)'" onmouseout="this.style.background=''">
-      <td style="padding:6px 8px;font-family:monospace;font-size:11px">${esc(m.product_no||'')}</td>
-      <td style="padding:6px 8px"><strong>${esc(m.product_name||'')}</strong></td>
-      <td style="padding:6px 8px">${esc(m.category||'')}</td>
-      <td style="padding:6px 8px">${esc(m.spec||'')}</td>
-      <td style="padding:6px 8px">${esc(m.maker_name||'')}</td>
-      <td style="padding:6px 8px;text-align:right">${m.unit_price?Number(m.unit_price).toLocaleString()+'円':''}</td>
-    </tr>`).join('')+
+    items.map((m,i)=>{
+      // data属性にインデックスを持たせてグローバルキャッシュから取得する方式
+      return `<tr data-mat-idx="${i}" onclick="selectMatFromPopup(${i})" style="cursor:pointer;border-bottom:0.5px solid var(--c-border)" onmouseover="this.style.background='var(--c-primary-bg)'" onmouseout="this.style.background=''">
+        <td style="padding:6px 8px;font-family:monospace;font-size:11px">${esc(m.product_no||'')}</td>
+        <td style="padding:6px 8px"><strong>${esc(m.product_name||'')}</strong></td>
+        <td style="padding:6px 8px">${esc(m.category||'')}</td>
+        <td style="padding:6px 8px">${esc(m.spec||'')}</td>
+        <td style="padding:6px 8px">${esc(m.maker_name||'')}</td>
+        <td style="padding:6px 8px;text-align:right">${m.unit_price?Number(m.unit_price).toLocaleString()+'円':''}</td>
+      </tr>`;
+    }).join('')+
     '</tbody></table>';
 }
+
+// フィルター済みリストを保持
+let _matPopupFiltered = [];
 
 function filterMatPopup() {
   const q  = (document.getElementById('msp-q')?.value||'').toLowerCase();
@@ -1766,12 +1773,17 @@ function filterMatPopup() {
   let items = _masters.materials;
   if(q)   items=items.filter(m=>(m.product_name||'').toLowerCase().includes(q)||(m.product_no||'').toLowerCase().includes(q)||(m.maker_name||'').toLowerCase().includes(q));
   if(cat) items=items.filter(m=>m.category===cat);
+  _matPopupFiltered = items;
   const el=document.getElementById('msp-list');
   if(el) el.innerHTML=renderMatPopupList(items);
 }
 
-function selectMatFromPopup(mJson) {
-  const m = JSON.parse(mJson);
+function selectMatFromPopup(filteredIdx) {
+  // フィルター済みリストからインデックスで取得
+  const list = _matPopupFiltered.length ? _matPopupFiltered : _masters.materials;
+  const m = list[filteredIdx];
+  if(!m) { toast('資材データの取得に失敗しました','error'); return; }
+
   const idx = _materialRows.length;
   const newRow = {
     material_slot: String(idx+1).padStart(2,'0'),
@@ -1785,9 +1797,16 @@ function selectMatFromPopup(mJson) {
     maker_name:    m.maker_name||'',
   };
   _materialRows.push(newRow);
-  appendMatRow(document.getElementById('mat-tbody'), newRow, idx);
+
+  const tbody = document.getElementById('mat-tbody');
+  if(!tbody) {
+    toast('資材シートが開いていません','error');
+    return;
+  }
+  appendMatRow(tbody, newRow, idx);
   calcMatTotal();
-  toast('「'+m.product_name+'」を追加しました','success');
+  toast('「'+m.product_name+'」を資材シートに追加しました','success');
+  document.getElementById('mat-search-ov')?.remove();
 }
 
 // ---- 資材マスタページ（CSV対応強化） ----
