@@ -5,7 +5,7 @@
 //  ・ログイン含む全API統一
 // ============================================================
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwKxypPrqzxHtac7V4vGtvdYi11Vd8PfhJTS3PqMztyQbuIIzGWQzgsb_iLyt55NxDh/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxDvxA5269I1es330v6gFATh_vgPpDrPznNjZfVDGVgXvSiXEg9R1bEgeU2k0rfmnra/exec';
 
 // ===== 状態 =====
 let _token  = localStorage.getItem('rl_token') || null;
