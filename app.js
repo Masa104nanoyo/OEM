@@ -1083,27 +1083,33 @@ async function saveProcesses() {
 
 // ===== 資材シートから資材マスタ登録ポップアップ =====
 function openMatMasterPopup(defaultName, defaultNo) {
-  const supOpts = '<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}">${esc(s.supplier_name)}</option>`).join('');
+  // 検索ポップアップが開いていたら一旦閉じる
+  document.getElementById('mat-search-ov')?.remove();
+
+  const supOpts = '<option value="">-</option>'+
+    (_masters.suppliers.length ? _masters.suppliers : _masters.partners.filter(p=>p.is_supplier===true||p.is_supplier==='TRUE'))
+    .map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}">${esc(s.partner_name||s.supplier_name)}</option>`).join('');
+
   const ov = document.createElement('div');
   ov.id = 'mat-master-ov';
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
-  ov.innerHTML = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9100;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.3)">
     <h3 style="font-size:16px;font-weight:700;margin-bottom:16px">🧵 資材マスタに登録</h3>
-    <div class="form-row form-row-2 mb-3">
-      <div class="form-group"><label>分類</label><select id="mp-cat">${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
-      <div class="form-group"><label>品番</label><input type="text" id="mp-no" value="${esc(defaultNo||'')}"></div>
-    </div>
-    <div class="form-group" style="margin-bottom:10px"><label>品名 ★</label><input type="text" id="mp-name" value="${esc(defaultName||'')}"></div>
     <div class="form-row form-row-2" style="margin-bottom:10px">
-      <div class="form-group"><label>規格</label><input type="text" id="mp-spec"></div>
-      <div class="form-group"><label>品質・組成</label><input type="text" id="mp-quality"></div>
+      <div class="form-group"><label>分類</label><select id="mp-cat">${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
+      <div class="form-group"><label>品番</label><input type="text" id="mp-no" value="${esc(defaultNo||'')}" placeholder="品番（任意）"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:10px"><label>品名 ★</label><input type="text" id="mp-name" value="${esc(defaultName||'')}" placeholder="品名を入力"></div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div class="form-group"><label>規格</label><input type="text" id="mp-spec" placeholder="例: 160cm巾"></div>
+      <div class="form-group"><label>品質・組成</label><input type="text" id="mp-quality" placeholder="例: 綿100%"></div>
     </div>
     <div class="form-row form-row-3" style="margin-bottom:10px">
       <div class="form-group"><label>単位</label><select id="mp-unit">${UNITS.map(u=>`<option value="${u}">${u}</option>`).join('')}</select></div>
       <div class="form-group"><label>単価（円）</label><input type="number" id="mp-price" placeholder="0"></div>
       <div class="form-group"><label>仕入先</label><select id="mp-sup">${supOpts}</select></div>
     </div>
-    <div class="form-group" style="margin-bottom:14px"><label>メーカー名</label><input type="text" id="mp-maker"></div>
+    <div class="form-group" style="margin-bottom:16px"><label>メーカー名</label><input type="text" id="mp-maker" placeholder="メーカー名"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" onclick="document.getElementById('mat-master-ov').remove()">キャンセル</button>
       <button class="btn btn-primary" onclick="saveMatMasterFromPopup()">資材マスタに登録</button>
@@ -1111,6 +1117,8 @@ function openMatMasterPopup(defaultName, defaultNo) {
   </div>`;
   document.body.appendChild(ov);
   ov.addEventListener('click', e=>{ if(e.target===ov) ov.remove(); });
+  // 品名フィールドにフォーカス
+  setTimeout(()=>document.getElementById('mp-name')?.focus(), 100);
 }
 
 async function saveMatMasterFromPopup() {
@@ -1721,7 +1729,7 @@ function openMatSearchPopup() {
     </div>
     <p style="font-size:11px;color:var(--c-text3);margin-top:8px">行をクリックすると資材シートに追加されます</p>
     <div style="display:flex;gap:8px;justify-content:space-between;margin-top:10px">
-      <button class="btn btn-secondary btn-sm" onclick="openMatMasterPopup('','')">＋ 新規資材をマスタ登録</button>
+      <button class="btn btn-primary btn-sm" onclick="openMatMasterPopup(document.getElementById('msp-q')?.value||'','')">＋ 新規資材をマスタに登録</button>
       <button class="btn btn-secondary" onclick="document.getElementById('mat-search-ov').remove()">閉じる</button>
     </div>
   </div>`;
