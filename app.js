@@ -390,11 +390,11 @@ function renderProductForm(p) {
         <div class="form-group"><label>ブランド</label><input type="text" id="f-brand" value="${esc(p?.brand||'')}"></div>
         <div class="form-group"><label>取引先</label>
           ${_masters.customers.length > 0 ? `
-          <input type="text" placeholder="取引先を絞り込み..." oninput="filterClientSel(this)" style="margin-bottom:4px;font-size:12px">
-          <select id="f-client-sel" onchange="onClientSel(this)" size="3" style="width:100%;font-size:12px">${supOpts}</select>
+          <input type="text" id="f-client-search" placeholder="取引先を絞り込み..." oninput="filterClientSel(this)" style="margin-bottom:4px;font-size:12px">
+          <select id="f-client-sel" onchange="onClientSel(this)" style="width:100%">${supOpts}</select>
           <input type="hidden" id="f-client-id" value="${esc(p?.client_id||'')}">
           ` : `
-          <input type="text" id="f-client-free" value="${esc(p?.client_name||p?.client_id||'')}" placeholder="取引先名を入力（得意先マスタに登録すると選択式になります）">
+          <input type="text" id="f-client-free" value="${esc(p?.client_name||p?.client_id||'')}" placeholder="取引先名（得意先マスタ登録後は選択式になります）">
           <input type="hidden" id="f-client-id" value="${esc(p?.client_id||'')}">
           <input type="hidden" id="f-client-sel" value="">
           <p style="font-size:10px;color:var(--c-text3);margin-top:4px">💡 マスタ管理→得意先から登録できます</p>
@@ -442,7 +442,7 @@ function renderProductForm(p) {
         <div class="form-group"><label>縫製工場</label>
           ${facList.length > 0 ? `
           <input type="text" id="f-factory-search" placeholder="工場名で絞り込み..." oninput="filterFactory()" style="margin-bottom:4px">
-          <select id="f-factory" size="4" style="width:100%;font-size:12px">
+          <select id="f-factory" style="width:100%;font-size:12px">
             <option value="">-- 選択 --</option>
             ${facList.map(f=>`<option value="${esc(facName(f))}" ${p?.factory_name===facName(f)?'selected':''}>${esc(facName(f))}${f.process_type?' ('+esc(f.process_type)+')':f.category?' ('+esc(f.category)+')':''}</option>`).join('')}
           </select>
@@ -1779,14 +1779,12 @@ function filterMatPopup() {
 }
 
 function selectMatFromPopup(filteredIdx) {
-  // フィルター済みリストからインデックスで取得
   const list = _matPopupFiltered.length ? _matPopupFiltered : _masters.materials;
   const m = list[filteredIdx];
   if(!m) { toast('資材データの取得に失敗しました','error'); return; }
 
-  const idx = _materialRows.length;
   const newRow = {
-    material_slot: String(idx+1).padStart(2,'0'),
+    material_slot: String(_materialRows.length+1).padStart(2,'0'),
     product_no:    m.product_no||'',
     product_name:  m.product_name||'',
     spec:          m.spec||'',
@@ -1798,12 +1796,24 @@ function selectMatFromPopup(filteredIdx) {
   };
   _materialRows.push(newRow);
 
+  // 資材シートが表示されていない場合は切り替えてから追加
   const tbody = document.getElementById('mat-tbody');
   if(!tbody) {
-    toast('資材シートが開いていません','error');
+    // まず資材タブに切り替えてから追加
+    document.getElementById('mat-search-ov')?.remove();
+    switchFsTab('materials');
+    // タブ切替後にDOMが描画されてから追加
+    setTimeout(()=>{
+      const tb = document.getElementById('mat-tbody');
+      if(tb) {
+        appendMatRow(tb, newRow, _materialRows.length-1);
+        calcMatTotal();
+      }
+      toast('「'+m.product_name+'」を資材シートに追加しました','success');
+    }, 300);
     return;
   }
-  appendMatRow(tbody, newRow, idx);
+  appendMatRow(tbody, newRow, _materialRows.length-1);
   calcMatTotal();
   toast('「'+m.product_name+'」を資材シートに追加しました','success');
   document.getElementById('mat-search-ov')?.remove();
