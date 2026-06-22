@@ -685,12 +685,12 @@ function confirmSize() {
 async function renderMaterialsTab() {
   const res = await api('product_materials.get', {style_code:_currentProduct.style_code});
   _materialRows = res?.items||[];
-  if (_materialRows.length===0) {
-    for(let i=0;i<10;i++) _materialRows.push({material_slot:String(i+1).padStart(2,'0')});
-  }
+  // 空行は除外（品番も品名も空のもの）
+  _materialRows = _materialRows.filter(r=>r.product_no||r.product_name);
+  // 初期空行は作らない（0件なら空のまま）
+
   const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}">${esc(s.partner_name||s.supplier_name)}</option>`).join('');
 
-  // カラーヘッダー
   const colorHeaders = Array.from({length:_matColorCols},(_,i)=>
     `<th style="min-width:110px">Col.${i+1}<br><small>コード/カラー名</small></th>`
   ).join('');
@@ -725,7 +725,9 @@ async function renderMaterialsTab() {
         <th style="width:28px"></th>
       </tr></thead>
       <tbody id="mat-tbody"></tbody>
-    </table></div>`;
+    </table>
+    ${_materialRows.length===0?'<div style="text-align:center;padding:30px;color:var(--c-text3)">「＋ 行を追加」または「資材マスタから追加」で資材を登録してください</div>':''}
+    </div>`;
 
   const tbody=document.getElementById('mat-tbody');
   _materialRows.forEach((r,i)=>appendMatRow(tbody,r,i,supOpts));
@@ -734,9 +736,16 @@ async function renderMaterialsTab() {
 
 function addMatColorCol() {
   if(_matColorCols>=7) return;
+  // 現在の入力値を保存
+  _materialRows.forEach((_,i)=>{ _matFields.forEach(f=>{ _materialRows[i][f]=getMF(i,f); }); });
   _matColorCols++;
   renderMaterialsTab();
 }
+
+const _matFields = ['product_no','product_name','spec','category','usage_location','usage_quantity','unit',
+  'loss_rate','unit_price','supplier_name','maker_name','memo',
+  'color1_code','color1_name','color2_code','color2_name','color3_code','color3_name',
+  'color4_code','color4_name','color5_code','color5_name','color6_code','color6_name','color7_code','color7_name'];
 
 function colCell(r, idx, n) {
   return `<td style="padding:3px 4px;min-width:110px">
@@ -783,11 +792,27 @@ function appendMatRow(tbody, r, idx, supOpts) {
 }
 
 function addMatRow() {
-  const idx=_materialRows.length;
-  _materialRows.push({material_slot:String(idx+1).padStart(2,'0')});
-  appendMatRow(document.getElementById('mat-tbody'),_materialRows[idx],idx);
+  const newRow = { material_slot: String(_materialRows.length+1).padStart(2,'00') };
+  _materialRows.push(newRow);
+  const tbody = document.getElementById('mat-tbody');
+  if(tbody) appendMatRow(tbody, newRow, _materialRows.length-1);
+  calcMatTotal();
 }
-function delMatRow(idx) { _materialRows.splice(idx,1); renderMaterialsTab(); }
+
+function delMatRow(idx) {
+  // 現在の入力値を保存してから削除
+  _matFields.forEach(f=>{ if(_materialRows[idx]) _materialRows[idx][f]=getMF(idx,f); });
+  _materialRows.splice(idx,1);
+  // 番号を詰めて再描画
+  const tbody = document.getElementById('mat-tbody');
+  if(tbody) {
+    tbody.innerHTML='';
+    const sN = s => s.partner_name||s.supplier_name||'';
+    const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sN(s))}">${esc(sN(s))}</option>`).join('');
+    _materialRows.forEach((r,i)=>appendMatRow(tbody,r,i,supOpts));
+    calcMatTotal();
+  }
+}
 
 function getMF(idx,f) {
   const el=document.querySelector(`[data-r="${idx}"][data-f="${f}"]`); return el?el.value:'';
@@ -806,18 +831,21 @@ function calcMatTotal() {
 }
 
 async function saveMaterialsData() {
-  const FIELDS=['product_name','product_no','spec','category','usage_location','usage_quantity','unit',
-    'loss_rate','unit_price','supplier_name','memo',
-    'color1_code','color1_name','color2_code','color2_name','color3_code','color3_name',
-    'color4_code','color4_name','color5_code','color5_name','color6_code','color6_name','color7_code','color7_name'];
-  const rows=_materialRows.map((_,idx)=>{
-    const o={material_slot:String(idx+1).padStart(2,'0')};
-    FIELDS.forEach(f=>{o[f]=getMF(idx,f);});
-    return o;
-  }).filter(r=>r.product_name||r.product_no);
-  const res=await api('product_materials.save',{style_code:_currentProduct.style_code,rows});
-  if(!res||!res.ok){toast(res?.error||'保存に失敗しました','error');return;}
-  toast('資材シートを保存しました','success');
+  // 入力値を収集（空行は除外）
+  const rows = [];
+  _materialRows.forEach((_,idx)=>{
+    const no   = getMF(idx,'product_no');
+    const name = getMF(idx,'product_name');
+    if(!no && !name) return; // 空行スキップ
+    const o = { material_slot: String(rows.length+1).padStart(2,'0') };
+    _matFields.forEach(f=>{ o[f] = getMF(idx,f); });
+    rows.push(o);
+  });
+  const res = await api('product_materials.save', {style_code:_currentProduct.style_code, rows});
+  if(!res||!res.ok){ toast(res?.error||'保存に失敗しました','error'); return; }
+  toast('資材シートを保存しました（'+rows.length+'行）','success');
+  // 保存後に空行を除外して再同期
+  _materialRows = rows;
 }
 
 // ===== 郵便番号自動入力 =====
