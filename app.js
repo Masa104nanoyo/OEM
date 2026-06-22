@@ -736,10 +736,57 @@ async function renderMaterialsTab() {
 
 function addMatColorCol() {
   if(_matColorCols>=7) return;
-  // 現在の入力値を保存
-  _materialRows.forEach((_,i)=>{ _matFields.forEach(f=>{ _materialRows[i][f]=getMF(i,f); }); });
+  // 現在の入力値を_materialRowsに保存してから列を追加
+  _materialRows.forEach((_,i)=>{
+    _matFields.forEach(f=>{ if(_materialRows[i]) _materialRows[i][f]=getMF(i,f); });
+  });
   _matColorCols++;
-  renderMaterialsTab();
+  // GASから再取得せず、現在の_materialRowsで再描画
+  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>{
+    const n=s.partner_name||s.supplier_name||'';
+    return `<option value="${esc(n)}">${esc(n)}</option>`;
+  }).join('');
+  const colorHeaders = Array.from({length:_matColorCols},(_,i)=>
+    `<th style="min-width:110px">Col.${i+1}<br><small>コード/カラー名</small></th>`
+  ).join('');
+  const fsBody = document.getElementById('fs-body');
+  if(!fsBody) return;
+  // ヘッダーのカラー列だけ追加（テーブル全体を作り直す）
+  const matTable = document.getElementById('mat-table');
+  if(matTable) {
+    // theadのtr最後のカラー列の前（ロス%の前）に追加
+    const thead = matTable.querySelector('thead tr');
+    if(thead) {
+      const lossth = Array.from(thead.querySelectorAll('th')).find(th=>th.textContent.includes('ロス%'));
+      if(lossth) {
+        const newTh = document.createElement('th');
+        newTh.style.minWidth='110px';
+        newTh.innerHTML=`Col.${_matColorCols}<br><small>コード/カラー名</small>`;
+        thead.insertBefore(newTh, lossth);
+      }
+    }
+    // 各行にカラーセルを追加
+    const tbody = matTable.querySelector('tbody');
+    if(tbody) {
+      Array.from(tbody.querySelectorAll('tr')).forEach((tr,i)=>{
+        const lossTd = Array.from(tr.querySelectorAll('td')).find(td=>{
+          const inp = td.querySelector(`[data-f="loss_rate"]`);
+          return inp && inp.dataset.r == i;
+        });
+        if(lossTd) {
+          const n = _matColorCols;
+          const newTd = document.createElement('td');
+          newTd.style.cssText='padding:3px 4px;min-width:100px';
+          newTd.innerHTML=`<input type="text" data-r="${i}" data-f="color${n}_code" value="" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px"><input type="text" data-r="${i}" data-f="color${n}_name" value="" placeholder="カラー名" style="font-size:11px;border-radius:0 0 4px 4px">`;
+          tr.insertBefore(newTd, lossTd);
+        }
+      });
+    }
+  }
+  // ボタンの更新
+  const addColBtn = document.querySelector('[onclick="addMatColorCol()"]');
+  if(addColBtn && _matColorCols>=7) addColBtn.remove();
+  toast(`Col.${_matColorCols}を追加しました`,'success');
 }
 
 const _matFields = ['product_no','product_name','spec','category','usage_location','usage_quantity','unit',
