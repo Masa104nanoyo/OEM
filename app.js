@@ -684,46 +684,70 @@ function confirmSize() {
 // ===== 資材シート =====
 async function renderMaterialsTab() {
   const res = await api('product_materials.get', {style_code:_currentProduct.style_code});
-  _materialRows = res?.items||[];
-  // 空行は除外（品番も品名も空のもの）
-  _materialRows = _materialRows.filter(r=>r.product_no||r.product_name);
-  // 初期空行は作らない（0件なら空のまま）
+  _materialRows = (res?.items||[]).filter(r=>r.product_no||r.product_name);
 
-  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}">${esc(s.partner_name||s.supplier_name)}</option>`).join('');
+  // 製品カラー（Col.ヘッダー用）
+  const prodColors = _productColors.filter(c=>c.code);
+  const numCols = Math.max(prodColors.length, _matColorCols, 3);
+  _matColorCols = numCols;
 
-  const colorHeaders = Array.from({length:_matColorCols},(_,i)=>
-    `<th style="min-width:110px">Col.${i+1}<br><small>コード/カラー名</small></th>`
+  // カラーヘッダー（製品カラー名を表示）
+  const colorHeaders = Array.from({length:numCols},(_,i)=>{
+    const c = prodColors[i];
+    return `<th style="min-width:130px;background:#1B3A6B;color:#fff">
+      <div style="font-size:11px;font-weight:600">Col.${i+1}</div>
+      <div style="font-size:10px;opacity:.85">${c?esc(c.code)+' '+esc(c.name):'（未設定）'}</div>
+    </th>`;
+  }).join('');
+  const colorSubHeaders = Array.from({length:numCols},()=>
+    `<th style="background:#2B5CE6;color:#fff;font-size:10px;min-width:130px">
+      <span style="opacity:.8">資材カラーコード</span> / <span style="opacity:.8">単価(円)</span>
+    </th>`
   ).join('');
+
+  // 着単価計算方法
+  const calcMethod = _currentProduct.cost_calc_method||'average';
+
+  const sN = s => s.partner_name||s.supplier_name||'';
+  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sN(s))}">${esc(sN(s))}</option>`).join('');
 
   document.getElementById('fs-body').innerHTML=`
     <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <code style="background:var(--c-bg);padding:2px 8px;border-radius:4px;font-size:12px">${esc(_currentProduct.style_code)}</code>
       <button class="btn btn-secondary btn-sm" onclick="addMatRow()">＋ 行を追加</button>
       <button class="btn btn-secondary btn-sm" onclick="openMatSearchPopup()">🔍 資材マスタから追加</button>
-      ${_matColorCols<7?`<button class="btn btn-secondary btn-sm" onclick="addMatColorCol()">＋ カラー列を追加</button>`:''}
-      <div style="margin-left:auto;font-size:13px">着単価合計: <strong id="mat-total" style="font-size:16px;color:var(--c-primary)">-</strong></div>
+      ${numCols<7?`<button class="btn btn-secondary btn-sm" onclick="addMatColorColNew()">＋ カラー列を追加</button>`:''}
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        <span style="font-size:12px;color:var(--c-text2)">着単価計算：</span>
+        <select id="cost-calc-method" onchange="saveCostCalcMethod(this.value)" style="font-size:12px">
+          <option value="average" ${calcMethod==='average'?'selected':''}>平均法</option>
+          <option value="per_color" ${calcMethod==='per_color'?'selected':''}>カラー毎</option>
+        </select>
+        <span style="font-size:13px">着単価合計: <strong id="mat-total" style="font-size:15px;color:var(--c-primary)">-</strong></span>
+      </div>
     </div>
     <datalist id="mat-names">${_masters.materials.map(m=>`<option value="${esc(m.product_name)}">`).join('')}</datalist>
     <div style="overflow-x:auto">
     <table class="material-table" id="mat-table">
-      <thead><tr>
-        <th style="width:32px">No.</th>
-        <th style="min-width:100px">品番</th>
-        <th style="min-width:160px">品名</th>
-        <th style="min-width:90px">規格</th>
-        <th style="width:80px">分類</th>
-        <th style="min-width:120px">使用箇所</th>
-        <th style="width:60px">用尺</th>
-        <th style="width:50px">単位</th>
-        ${colorHeaders}
-        <th style="width:55px">ロス%</th>
-        <th style="width:70px">単価</th>
-        <th style="width:70px">着単価</th>
-        <th style="min-width:110px">仕入先</th>
-        <th style="min-width:90px">メーカー</th>
-        <th style="min-width:90px">メモ</th>
-        <th style="width:28px"></th>
-      </tr></thead>
+      <thead>
+        <tr>
+          <th rowspan="2" style="width:28px">No.</th>
+          <th rowspan="2" style="min-width:90px">品番</th>
+          <th rowspan="2" style="min-width:140px">品名</th>
+          <th rowspan="2" style="min-width:80px">規格</th>
+          <th rowspan="2" style="width:75px">分類</th>
+          <th rowspan="2" style="min-width:110px">使用箇所</th>
+          <th rowspan="2" style="width:55px">用尺</th>
+          <th rowspan="2" style="width:44px">単位</th>
+          ${colorHeaders}
+          <th rowspan="2" style="width:48px">ロス%</th>
+          <th rowspan="2" style="min-width:100px">仕入先</th>
+          <th rowspan="2" style="min-width:80px">メーカー</th>
+          <th rowspan="2" style="min-width:80px">メモ</th>
+          <th rowspan="2" style="width:56px">操作</th>
+        </tr>
+        <tr>${colorSubHeaders}</tr>
+      </thead>
       <tbody id="mat-tbody"></tbody>
     </table>
     ${_materialRows.length===0?'<div style="text-align:center;padding:30px;color:var(--c-text3)">「＋ 行を追加」または「資材マスタから追加」で資材を登録してください</div>':''}
@@ -734,112 +758,81 @@ async function renderMaterialsTab() {
   calcMatTotal();
 }
 
-function addMatColorCol() {
+async function saveCostCalcMethod(val) {
+  _currentProduct.cost_calc_method = val;
+  await api('products.update', {style_code:_currentProduct.style_code, cost_calc_method:val});
+  calcMatTotal();
+  toast('計算方法を変更しました','success');
+}
+
+function addMatColorColNew() {
   if(_matColorCols>=7) return;
-  // 現在の入力値を_materialRowsに保存してから列を追加
+  // 入力値を保存
+  _matFields.forEach(f=>{
+    _materialRows.forEach((_,i)=>{ if(_materialRows[i]) _materialRows[i][f]=getMF(i,f); });
+  });
+  // カラー単価も保存
   _materialRows.forEach((_,i)=>{
-    _matFields.forEach(f=>{ if(_materialRows[i]) _materialRows[i][f]=getMF(i,f); });
+    for(let n=1;n<=_matColorCols;n++){
+      _materialRows[i]['col'+n+'_matcode'] = getMF(i,'col'+n+'_matcode');
+      _materialRows[i]['col'+n+'_price']   = getMF(i,'col'+n+'_price');
+    }
   });
   _matColorCols++;
-  // GASから再取得せず、現在の_materialRowsで再描画
-  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>{
-    const n=s.partner_name||s.supplier_name||'';
-    return `<option value="${esc(n)}">${esc(n)}</option>`;
-  }).join('');
-  const colorHeaders = Array.from({length:_matColorCols},(_,i)=>
-    `<th style="min-width:110px">Col.${i+1}<br><small>コード/カラー名</small></th>`
-  ).join('');
-  const fsBody = document.getElementById('fs-body');
-  if(!fsBody) return;
-  // ヘッダーのカラー列だけ追加（テーブル全体を作り直す）
-  const matTable = document.getElementById('mat-table');
-  if(matTable) {
-    // theadのtr最後のカラー列の前（ロス%の前）に追加
-    const thead = matTable.querySelector('thead tr');
-    if(thead) {
-      const lossth = Array.from(thead.querySelectorAll('th')).find(th=>th.textContent.includes('ロス%'));
-      if(lossth) {
-        const newTh = document.createElement('th');
-        newTh.style.minWidth='110px';
-        newTh.innerHTML=`Col.${_matColorCols}<br><small>コード/カラー名</small>`;
-        thead.insertBefore(newTh, lossth);
-      }
-    }
-    // 各行にカラーセルを追加
-    const tbody = matTable.querySelector('tbody');
-    if(tbody) {
-      Array.from(tbody.querySelectorAll('tr')).forEach((tr,i)=>{
-        const lossTd = Array.from(tr.querySelectorAll('td')).find(td=>{
-          const inp = td.querySelector(`[data-f="loss_rate"]`);
-          return inp && inp.dataset.r == i;
-        });
-        if(lossTd) {
-          const n = _matColorCols;
-          const newTd = document.createElement('td');
-          newTd.style.cssText='padding:3px 4px;min-width:100px';
-          newTd.innerHTML=`<input type="text" data-r="${i}" data-f="color${n}_code" value="" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px"><input type="text" data-r="${i}" data-f="color${n}_name" value="" placeholder="カラー名" style="font-size:11px;border-radius:0 0 4px 4px">`;
-          tr.insertBefore(newTd, lossTd);
-        }
-      });
-    }
-  }
-  // ボタンの更新
-  const addColBtn = document.querySelector('[onclick="addMatColorCol()"]');
-  if(addColBtn && _matColorCols>=7) addColBtn.remove();
-  toast(`Col.${_matColorCols}を追加しました`,'success');
+  renderMaterialsTab();
 }
 
-const _matFields = ['product_no','product_name','spec','category','usage_location','usage_quantity','unit',
-  'loss_rate','unit_price','supplier_name','maker_name','memo',
-  'color1_code','color1_name','color2_code','color2_name','color3_code','color3_name',
-  'color4_code','color4_name','color5_code','color5_name','color6_code','color6_name','color7_code','color7_name'];
-
-function colCell(r, idx, n) {
-  return `<td style="padding:3px 4px;min-width:110px">
-    <input type="text" data-r="${idx}" data-f="color${n}_code" value="${esc(r['color'+n+'_code']||'')}" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px">
-    <input type="text" data-r="${idx}" data-f="color${n}_name" value="${esc(r['color'+n+'_name']||'')}" placeholder="カラー名" style="font-size:11px;border-radius:0 0 4px 4px">
-  </td>`;
-}
+const _matFields = ['product_no','product_name','spec','category','usage_location',
+  'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo'];
 
 function appendMatRow(tbody, r, idx, supOpts) {
-  const sName = s => s.partner_name||s.supplier_name||'';
-  if (!supOpts) supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sName(s))}" ${r.supplier_name===sName(s)?'selected':''}>${esc(sName(s))}</option>`).join('');
+  const sN = s => s.partner_name||s.supplier_name||'';
+  if(!supOpts) supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sN(s))}">${esc(sN(s))}</option>`).join('');
 
-  const colorCells = Array.from({length:_matColorCols},(_,n)=>`<td style="padding:3px 4px;min-width:100px">
-    <input type="text" data-r="${idx}" data-f="color${n+1}_code" value="${esc(r['color'+(n+1)+'_code']||'')}" placeholder="コード" style="font-size:11px;border-radius:4px 4px 0 0;margin-bottom:-1px">
-    <input type="text" data-r="${idx}" data-f="color${n+1}_name" value="${esc(r['color'+(n+1)+'_name']||'')}" placeholder="カラー名" style="font-size:11px;border-radius:0 0 4px 4px">
-  </td>`).join('');
+  // カラーセル（カラーコード+単価の2段）
+  const prodColors = _productColors.filter(c=>c.code);
+  const colorCells = Array.from({length:_matColorCols},(_,n)=>{
+    const matCode = r['col'+(n+1)+'_matcode']||'';
+    const price   = r['col'+(n+1)+'_price']||'';
+    return `<td style="padding:3px 4px;min-width:120px;background:${n%2===0?'#F7FAFF':'#EFF4FF'}">
+      <input type="text" data-r="${idx}" data-f="col${n+1}_matcode" value="${esc(matCode)}" placeholder="資材カラーコード" style="font-size:10px;width:100%;margin-bottom:2px;border-radius:3px">
+      <input type="number" step="1" data-r="${idx}" data-f="col${n+1}_price" value="${esc(price)}" placeholder="単価" oninput="calcRowTotal(${idx})" style="font-size:11px;width:100%;text-align:right;border-radius:3px;font-weight:600;color:#2B5CE6">
+    </td>`;
+  }).join('');
 
   const tr=document.createElement('tr');
   tr.dataset.idx=idx;
   tr.innerHTML=`
     <td class="slot-cell">${idx+1}</td>
-    <td><input type="text" data-r="${idx}" data-f="product_no"       value="${esc(r.product_no||'')}"       placeholder="品番" style="min-width:90px"></td>
-    <td><input type="text" data-r="${idx}" data-f="product_name"     value="${esc(r.product_name||'')}"     placeholder="品名" list="mat-names" style="min-width:140px"></td>
-    <td><input type="text" data-r="${idx}" data-f="spec"             value="${esc(r.spec||'')}"             placeholder="規格"></td>
+    <td><input type="text" data-r="${idx}" data-f="product_no"   value="${esc(r.product_no||'')}"   placeholder="品番" style="min-width:80px"></td>
+    <td><input type="text" data-r="${idx}" data-f="product_name" value="${esc(r.product_name||'')}" placeholder="品名" list="mat-names" style="min-width:130px"></td>
+    <td><input type="text" data-r="${idx}" data-f="spec"         value="${esc(r.spec||'')}"         placeholder="規格"></td>
     <td><select data-r="${idx}" data-f="category" style="font-size:11px;width:100%">
       ${CATEGORIES.map(c=>`<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-r="${idx}" data-f="usage_location"   value="${esc(r.usage_location||'')}"   placeholder="使用箇所" style="min-width:110px"></td>
-    <td><input type="number" step="0.01" data-r="${idx}" data-f="usage_quantity" value="${esc(r.usage_quantity||'')}" placeholder="0" oninput="calcRowPrice(${idx})" style="width:55px;text-align:right"></td>
-    <td><select data-r="${idx}" data-f="unit" style="font-size:11px;width:48px">
+    <td><input type="text" data-r="${idx}" data-f="usage_location" value="${esc(r.usage_location||'')}" placeholder="使用箇所" style="min-width:100px"></td>
+    <td><input type="number" step="0.01" data-r="${idx}" data-f="usage_quantity" value="${esc(r.usage_quantity||'')}" placeholder="0" oninput="calcRowTotal(${idx})" style="width:50px;text-align:right"></td>
+    <td><select data-r="${idx}" data-f="unit" style="font-size:11px;width:42px">
       ${UNITS.map(u=>`<option value="${u}" ${r.unit===u?'selected':''}>${u}</option>`).join('')}
     </select></td>
     ${colorCells}
-    <td><input type="number" step="0.1" data-r="${idx}" data-f="loss_rate"  value="${esc(r.loss_rate||'')}"  placeholder="0" style="width:50px;text-align:right"></td>
-    <td><input type="number" step="1"   data-r="${idx}" data-f="unit_price" value="${esc(r.unit_price||'')}" placeholder="0" oninput="calcRowPrice(${idx})" style="width:65px;text-align:right"></td>
-    <td id="rp-${idx}" style="text-align:right;font-weight:600;font-size:12px;color:var(--c-primary);padding-right:6px">${r.unit_price&&r.usage_quantity?Math.round(r.unit_price*r.usage_quantity).toLocaleString()+'円':'-'}</td>
+    <td><input type="number" step="0.1" data-r="${idx}" data-f="loss_rate" value="${esc(r.loss_rate||'')}" placeholder="0" oninput="calcRowTotal(${idx})" style="width:44px;text-align:right"></td>
     <td><select data-r="${idx}" data-f="supplier_name" style="font-size:11px;width:100%">
-      <option value="">-</option>${_masters.suppliers.map(s=>`<option value="${esc(sName(s))}" ${r.supplier_name===sName(s)?'selected':''}>${esc(sName(s))}</option>`).join('')}
+      <option value="">-</option>${_masters.suppliers.map(s=>`<option value="${esc(sN(s))}" ${r.supplier_name===sN(s)?'selected':''}>${esc(sN(s))}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-r="${idx}" data-f="maker_name" value="${esc(r.maker_name||'')}" placeholder="メーカー" style="min-width:80px"></td>
-    <td><input type="text" data-r="${idx}" data-f="memo"        value="${esc(r.memo||'')}"      placeholder="メモ" style="min-width:80px"></td>
-    <td><button class="del-btn" onclick="delMatRow(${idx})" title="削除">✕</button></td>`;
+    <td><input type="text" data-r="${idx}" data-f="maker_name" value="${esc(r.maker_name||'')}" placeholder="メーカー" style="min-width:70px"></td>
+    <td><input type="text" data-r="${idx}" data-f="memo"       value="${esc(r.memo||'')}"       placeholder="メモ"     style="min-width:70px"></td>
+    <td style="text-align:center;white-space:nowrap">
+      <div id="rp-${idx}" style="font-size:10px;font-weight:600;color:var(--c-primary);margin-bottom:2px">-</div>
+      <button class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 5px;margin-bottom:2px" onclick="editMatMaster(${idx})" title="マスタ編集">✏️</button>
+      <button class="del-btn" onclick="delMatRow(${idx})" title="削除">✕</button>
+    </td>`;
   tbody.appendChild(tr);
+  calcRowTotal(idx);
 }
 
 function addMatRow() {
-  const newRow = { material_slot: String(_materialRows.length+1).padStart(2,'00') };
+  const newRow = { material_slot: String(_materialRows.length+1).padStart(2,'0') };
   _materialRows.push(newRow);
   const tbody = document.getElementById('mat-tbody');
   if(tbody) appendMatRow(tbody, newRow, _materialRows.length-1);
@@ -847,14 +840,12 @@ function addMatRow() {
 }
 
 function delMatRow(idx) {
-  // 現在の入力値を保存してから削除
   _matFields.forEach(f=>{ if(_materialRows[idx]) _materialRows[idx][f]=getMF(idx,f); });
   _materialRows.splice(idx,1);
-  // 番号を詰めて再描画
   const tbody = document.getElementById('mat-tbody');
   if(tbody) {
     tbody.innerHTML='';
-    const sN = s => s.partner_name||s.supplier_name||'';
+    const sN = s=>s.partner_name||s.supplier_name||'';
     const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(sN(s))}">${esc(sN(s))}</option>`).join('');
     _materialRows.forEach((r,i)=>appendMatRow(tbody,r,i,supOpts));
     calcMatTotal();
@@ -864,34 +855,83 @@ function delMatRow(idx) {
 function getMF(idx,f) {
   const el=document.querySelector(`[data-r="${idx}"][data-f="${f}"]`); return el?el.value:'';
 }
-function calcRowPrice(idx) {
-  const qty=parseFloat(getMF(idx,'usage_quantity'))||0;
-  const prc=parseFloat(getMF(idx,'unit_price'))||0;
+
+function calcRowTotal(idx) {
+  const qty  = parseFloat(getMF(idx,'usage_quantity'))||0;
+  const loss = (parseFloat(getMF(idx,'loss_rate'))||0)/100;
+  const method = document.getElementById('cost-calc-method')?.value || _currentProduct.cost_calc_method||'average';
+
+  let total = 0;
+  if(method==='average') {
+    // 平均法：全カラーの単価平均
+    const prices=[];
+    for(let n=1;n<=_matColorCols;n++){
+      const p=parseFloat(getMF(idx,'col'+n+'_price'));
+      if(p) prices.push(p);
+    }
+    const avg = prices.length ? prices.reduce((a,b)=>a+b,0)/prices.length : 0;
+    total = Math.round(qty * avg * (1+loss));
+  } else {
+    // カラー毎：Col.1の単価で代表表示（全カラー合計/カラー数）
+    const prices=[];
+    for(let n=1;n<=_matColorCols;n++){
+      const p=parseFloat(getMF(idx,'col'+n+'_price'));
+      if(p) prices.push(p);
+    }
+    total = prices.length ? Math.round(qty * (prices.reduce((a,b)=>a+b,0)/prices.length) * (1+loss)) : 0;
+  }
+
   const el=document.getElementById('rp-'+idx);
-  if(el) el.textContent=qty&&prc?Math.round(qty*prc).toLocaleString()+'円':'-';
+  if(el) el.textContent = total ? total.toLocaleString()+'円' : '-';
   calcMatTotal();
 }
+
 function calcMatTotal() {
   let t=0;
-  _materialRows.forEach((_,i)=>{t+=(parseFloat(getMF(i,'usage_quantity'))||0)*(parseFloat(getMF(i,'unit_price'))||0);});
-  const el=document.getElementById('mat-total'); if(el) el.textContent=Math.round(t).toLocaleString()+'円';
+  _materialRows.forEach((_,i)=>{
+    const el=document.getElementById('rp-'+i);
+    if(el) {
+      const v=parseInt(el.textContent.replace(/[^0-9]/g,''));
+      if(!isNaN(v)) t+=v;
+    }
+  });
+  const el=document.getElementById('mat-total');
+  if(el) el.textContent=t?t.toLocaleString()+'円':'-';
+}
+
+// 資材シートから直接マスタ編集
+function editMatMaster(idx) {
+  const no   = getMF(idx,'product_no');
+  const name = getMF(idx,'product_name');
+  // マスタ検索
+  const mat = _masters.materials.find(m=>m.product_no===no||m.product_name===name);
+  if(mat) {
+    openMaterialFormWithColorPrices(mat, _masters.materials.indexOf(mat));
+  } else {
+    // マスタ未登録の場合は新規登録
+    openMatMasterPopup(name, no);
+    toast('資材マスタに未登録です。新規登録してください。','error');
+  }
 }
 
 async function saveMaterialsData() {
-  // 入力値を収集（空行は除外）
   const rows = [];
   _materialRows.forEach((_,idx)=>{
     const no   = getMF(idx,'product_no');
     const name = getMF(idx,'product_name');
-    if(!no && !name) return; // 空行スキップ
+    if(!no && !name) return;
     const o = { material_slot: String(rows.length+1).padStart(2,'0') };
     _matFields.forEach(f=>{ o[f] = getMF(idx,f); });
+    // カラー単価
+    for(let n=1;n<=_matColorCols;n++){
+      o['col'+n+'_matcode'] = getMF(idx,'col'+n+'_matcode');
+      o['col'+n+'_price']   = getMF(idx,'col'+n+'_price');
+    }
     rows.push(o);
   });
   const res = await api('product_materials.save', {style_code:_currentProduct.style_code, rows});
   if(!res||!res.ok){ toast(res?.error||'保存に失敗しました','error'); return; }
   toast('資材シートを保存しました（'+rows.length+'行）','success');
-  // 保存後に空行を除外して再同期
   _materialRows = rows;
 }
 
@@ -1961,10 +2001,27 @@ async function importMaterialCSV(e) {
   const m=await api('materials.list'); if(m) _masters.materials=m.items;
   renderMaterialPage(document.getElementById('master-content'));
 }
-function openMaterialForm(idx) {
+async function openMaterialForm(idx) {
   const m=idx!==undefined?_masters.materials[idx]:null;
-  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.supplier_name)}" ${m?.supplier_name===s.supplier_name?'selected':''}>${esc(s.supplier_name)}</option>`).join('');
+  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}" ${m?.supplier_name===(s.partner_name||s.supplier_name)?'selected':''}>${esc(s.partner_name||s.supplier_name)}</option>`).join('');
   const a=document.getElementById('mat-form'); if(!a) return;
+
+  // 既存のカラー単価を取得
+  let colorPrices = [];
+  if(m?.material_id) {
+    const cpRes = await api('material_color_prices.get', {material_id:m.material_id});
+    colorPrices = cpRes?.items||[];
+  }
+
+  const cpRows = colorPrices.map((cp,i)=>`
+    <tr>
+      <td><input type="text" id="cp-code-${i}" value="${esc(cp.color_code||'')}" placeholder="#115" style="width:100%;font-size:12px"></td>
+      <td><input type="text" id="cp-name-${i}" value="${esc(cp.color_name||'')}" placeholder="ホワイト" style="width:100%;font-size:12px"></td>
+      <td><input type="number" id="cp-price-${i}" value="${esc(cp.unit_price||'')}" placeholder="0" style="width:100%;font-size:12px;text-align:right"></td>
+      <td><input type="text" id="cp-memo-${i}" value="${esc(cp.memo||'')}" placeholder="備考" style="width:100%;font-size:12px"></td>
+      <td><button class="del-btn" onclick="this.closest('tr').remove();updateCpCount()" style="font-size:11px">✕</button></td>
+    </tr>`).join('');
+
   a.innerHTML=`<div class="card" style="margin-top:16px">
     <h3 style="font-size:15px;font-weight:700;margin-bottom:16px">${m?'資材を編集':'新規資材登録'}</h3>
     <div class="form-row form-row-3">
@@ -1978,23 +2035,217 @@ function openMaterialForm(idx) {
       <div class="form-group"><label>単位</label><select id="mc-unit">${UNITS.map(u=>`<option value="${u}" ${m?.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
     </div>
     <div class="form-row form-row-3">
-      <div class="form-group"><label>仕入先 ★</label><select id="mc-sup">${supOpts}</select></div>
+      <div class="form-group"><label>仕入先</label><select id="mc-sup">${supOpts}</select></div>
       <div class="form-group"><label>メーカー名</label><input type="text" id="mc-maker" value="${esc(m?.maker_name||'')}"></div>
-      <div class="form-group"><label>単価（円）</label><input type="number" id="mc-price" value="${esc(m?.unit_price||'')}"></div>
+      <div class="form-group"><label>基準単価（円）</label><input type="number" id="mc-price" value="${esc(m?.unit_price||'')}"></div>
     </div>
     <div class="form-group"><label>備考</label><textarea id="mc-memo">${esc(m?.memo||'')}</textarea></div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+
+    <div style="margin-top:16px;border-top:1px solid var(--c-border);padding-top:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <h4 style="font-size:13px;font-weight:700">🎨 カラー別単価</h4>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="addCpRow()">＋ カラーを追加</button>
+        <span style="font-size:11px;color:var(--c-text3)">規格/カラーごとに単価を設定。資材シートに自動転記されます。</span>
+      </div>
+      <table class="master-table" style="font-size:12px">
+        <thead><tr><th>カラーコード</th><th>カラー名</th><th>単価（円）</th><th>備考</th><th style="width:28px"></th></tr></thead>
+        <tbody id="cp-tbody">${cpRows}</tbody>
+      </table>
+      <div id="cp-count" style="font-size:11px;color:var(--c-text3);margin-top:6px">${colorPrices.length}件登録済み</div>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
       <button class="btn btn-secondary" onclick="document.getElementById('mat-form').innerHTML=''">キャンセル</button>
       <button class="btn btn-primary" onclick="saveMaterial('${esc(m?.material_id||'')}')">保存する</button>
     </div></div>`;
   a.scrollIntoView({behavior:'smooth'});
 }
+
+async function openMaterialFormWithColorPrices(m, matIdx) {
+  // 資材シートから直接マスタ編集（オーバーレイで開く）
+  const supOpts='<option value="">-</option>'+_masters.suppliers.map(s=>`<option value="${esc(s.partner_name||s.supplier_name)}" ${m?.supplier_name===(s.partner_name||s.supplier_name)?'selected':''}>${esc(s.partner_name||s.supplier_name)}</option>`).join('');
+
+  let colorPrices = [];
+  if(m?.material_id) {
+    const cpRes = await api('material_color_prices.get', {material_id:m.material_id});
+    colorPrices = cpRes?.items||[];
+  }
+
+  const cpRows = colorPrices.map((cp,i)=>`<tr>
+    <td><input type="text" id="mep-code-${i}" value="${esc(cp.color_code||'')}" placeholder="#115" style="width:100%;font-size:12px"></td>
+    <td><input type="text" id="mep-name-${i}" value="${esc(cp.color_name||'')}" placeholder="ホワイト" style="width:100%;font-size:12px"></td>
+    <td><input type="number" id="mep-price-${i}" value="${esc(cp.unit_price||'')}" placeholder="0" style="width:100%;font-size:12px;text-align:right"></td>
+    <td><input type="text" id="mep-memo-${i}" value="${esc(cp.memo||'')}" placeholder="備考" style="width:100%;font-size:12px"></td>
+    <td><button class="del-btn" onclick="this.closest('tr').remove()" style="font-size:11px">✕</button></td>
+  </tr>`).join('');
+
+  const ov = document.createElement('div');
+  ov.id='mat-edit-ov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9200;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:640px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:16px">✏️ 資材マスタ編集：${esc(m?.product_name||'新規')}</h3>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label>分類</label><select id="mep-cat">${CATEGORIES.map(c=>`<option value="${c}" ${m?.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="form-group"><label>品番</label><input type="text" id="mep-no" value="${esc(m?.product_no||'')}"></div>
+      <div class="form-group"><label>品名 ★</label><input type="text" id="mep-name" value="${esc(m?.product_name||'')}"></div>
+    </div>
+    <div class="form-row form-row-3">
+      <div class="form-group"><label>規格</label><input type="text" id="mep-spec" value="${esc(m?.spec||'')}"></div>
+      <div class="form-group"><label>単位</label><select id="mep-unit">${UNITS.map(u=>`<option value="${u}" ${m?.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
+      <div class="form-group"><label>基準単価（円）</label><input type="number" id="mep-price-base" value="${esc(m?.unit_price||'')}"></div>
+    </div>
+    <div class="form-row form-row-2">
+      <div class="form-group"><label>仕入先</label><select id="mep-sup">${supOpts}</select></div>
+      <div class="form-group"><label>メーカー</label><input type="text" id="mep-maker" value="${esc(m?.maker_name||'')}"></div>
+    </div>
+
+    <div style="margin-top:14px;border-top:1px solid var(--c-border);padding-top:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <h4 style="font-size:13px;font-weight:700">🎨 カラー別単価</h4>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="addMepRow()">＋ カラーを追加</button>
+      </div>
+      <table class="master-table" style="font-size:12px">
+        <thead><tr><th>カラーコード</th><th>カラー名</th><th>単価（円）</th><th>備考</th><th style="width:28px"></th></tr></thead>
+        <tbody id="mep-tbody">${cpRows}</tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-secondary" onclick="document.getElementById('mat-edit-ov').remove()">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveMatMasterFromSheet('${esc(m?.material_id||'')}')">保存して資材シートに反映</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click',e=>{if(e.target===ov) ov.remove();});
+}
+
+function addMepRow() {
+  const tbody=document.getElementById('mep-tbody'); if(!tbody) return;
+  const i=tbody.querySelectorAll('tr').length;
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input type="text" id="mep-code-${i}" placeholder="#115" style="width:100%;font-size:12px"></td>
+    <td><input type="text" id="mep-name-${i}" placeholder="ホワイト" style="width:100%;font-size:12px"></td>
+    <td><input type="number" id="mep-price-${i}" placeholder="0" style="width:100%;font-size:12px;text-align:right"></td>
+    <td><input type="text" id="mep-memo-${i}" placeholder="備考" style="width:100%;font-size:12px"></td>
+    <td><button class="del-btn" onclick="this.closest('tr').remove()" style="font-size:11px">✕</button></td>`;
+  tbody.appendChild(tr);
+}
+
+async function saveMatMasterFromSheet(id) {
+  const g = el => document.getElementById(el)?.value||'';
+  if(!g('mep-name')){toast('品名を入力してください','error');return;}
+
+  // 資材本体を保存
+  const res = await api('materials.upsert',{
+    material_id:id||undefined, category:g('mep-cat'), product_no:g('mep-no'),
+    product_name:g('mep-name'), spec:g('mep-spec'), unit:g('mep-unit'),
+    unit_price:parseFloat(g('mep-price-base'))||0, supplier_name:g('mep-sup'), maker_name:g('mep-maker')
+  });
+  if(!res||!res.ok){toast('保存失敗','error');return;}
+
+  // カラー単価を保存
+  const material_id = id||res.material_id;
+  const rows = document.querySelectorAll('#mep-tbody tr');
+  const prices = [];
+  rows.forEach((tr,i)=>{
+    const code  = document.getElementById('mep-code-'+i)?.value||'';
+    const name  = document.getElementById('mep-name-'+i)?.value||'';
+    const price = parseFloat(document.getElementById('mep-price-'+i)?.value)||0;
+    const memo  = document.getElementById('mep-memo-'+i)?.value||'';
+    if(code||name) prices.push({color_code:code, color_name:name, unit_price:price, memo});
+  });
+  if(material_id) {
+    await api('material_color_prices.upsert', {material_id, prices});
+  }
+
+  toast('マスタを保存しました','success');
+
+  // マスタ更新
+  const mr = await api('materials.list'); if(mr) _masters.materials=mr.items;
+  document.getElementById('mat-edit-ov')?.remove();
+
+  // 資材シートの該当行の単価を自動反映（製品カラー順にCol.の単価を更新）
+  if(prices.length > 0) {
+    const prodColors = _productColors.filter(c=>c.code);
+    // 現在フォーカスされている行を探す
+    const tbody = document.getElementById('mat-tbody');
+    if(tbody) {
+      const matName = g('mep-name');
+      _materialRows.forEach((_,idx)=>{
+        const rowName = getMF(idx,'product_name');
+        const rowNo   = getMF(idx,'product_no');
+        if(rowName===matName || (g('mep-no') && rowNo===g('mep-no'))) {
+          // 製品カラーに対応するカラー単価を設定
+          prodColors.forEach((pc,ci)=>{
+            // 製品カラー名と資材カラー名で照合（部分一致）
+            const matched = prices.find(p=>
+              p.color_name && pc.name &&
+              (p.color_name.includes(pc.name) || pc.name.includes(p.color_name))
+            ) || prices[ci]; // 順番でフォールバック
+            if(matched) {
+              const codeEl  = document.querySelector(`[data-r="${idx}"][data-f="col${ci+1}_matcode"]`);
+              const priceEl = document.querySelector(`[data-r="${idx}"][data-f="col${ci+1}_price"]`);
+              if(codeEl && !codeEl.value)  codeEl.value  = matched.color_code||'';
+              if(priceEl && !priceEl.value) priceEl.value = matched.unit_price||'';
+            }
+          });
+          calcRowTotal(idx);
+        }
+      });
+    }
+  }
+}
+
+function addCpRow() {
+  const tbody = document.getElementById('cp-tbody'); if(!tbody) return;
+  const i = tbody.querySelectorAll('tr').length;
+  const tr = document.createElement('tr');
+  tr.innerHTML=`
+    <td><input type="text" id="cp-code-${i}" placeholder="#115" style="width:100%;font-size:12px"></td>
+    <td><input type="text" id="cp-name-${i}" placeholder="ホワイト" style="width:100%;font-size:12px"></td>
+    <td><input type="number" id="cp-price-${i}" placeholder="0" style="width:100%;font-size:12px;text-align:right"></td>
+    <td><input type="text" id="cp-memo-${i}" placeholder="備考" style="width:100%;font-size:12px"></td>
+    <td><button class="del-btn" onclick="this.closest('tr').remove();updateCpCount()" style="font-size:11px">✕</button></td>`;
+  tbody.appendChild(tr);
+  updateCpCount();
+}
+
+function updateCpCount() {
+  const tbody = document.getElementById('cp-tbody');
+  const el = document.getElementById('cp-count');
+  if(tbody&&el) el.textContent=tbody.querySelectorAll('tr').length+'件';
+}
+
 async function saveMaterial(id) {
   const g=el=>document.getElementById(el)?.value||'';
   if(!g('mc-name')){toast('品名を入力してください','error');return;}
-  const res=await api('materials.upsert',{material_id:id||undefined,category:g('mc-cat'),product_no:g('mc-no'),product_name:g('mc-name'),spec:g('mc-spec'),quality:g('mc-quality'),unit:g('mc-unit'),supplier_name:g('mc-sup'),maker_name:g('mc-maker'),unit_price:parseFloat(g('mc-price'))||0,memo:g('mc-memo')});
+
+  // 資材本体を保存
+  const res=await api('materials.upsert',{
+    material_id:id||undefined,category:g('mc-cat'),product_no:g('mc-no'),
+    product_name:g('mc-name'),spec:g('mc-spec'),quality:g('mc-quality'),
+    unit:g('mc-unit'),supplier_name:g('mc-sup'),maker_name:g('mc-maker'),
+    unit_price:parseFloat(g('mc-price'))||0,memo:g('mc-memo')
+  });
   if(!res||!res.ok){toast('保存失敗','error');return;}
-  toast('保存しました','success');
+
+  // カラー単価を保存
+  const material_id = id||res.material_id;
+  const cpRows = document.querySelectorAll('#cp-tbody tr');
+  const prices = [];
+  cpRows.forEach((tr,i)=>{
+    const code  = document.getElementById('cp-code-'+i)?.value||'';
+    const name  = document.getElementById('cp-name-'+i)?.value||'';
+    const price = parseFloat(document.getElementById('cp-price-'+i)?.value)||0;
+    const memo  = document.getElementById('cp-memo-'+i)?.value||'';
+    if(code||name) prices.push({color_code:code,color_name:name,unit_price:price,memo});
+  });
+  if(material_id) {
+    await api('material_color_prices.upsert', {material_id, prices});
+  }
+
+  toast('保存しました（カラー単価'+prices.length+'件）','success');
   const r=await api('materials.list'); if(r) _masters.materials=r.items;
   renderMaterialPage(document.getElementById('master-content'));
 }
