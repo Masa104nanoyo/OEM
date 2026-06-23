@@ -2051,7 +2051,7 @@ async function generateMaterialOrderPDF() {
     const shipTel   = document.getElementById('pop-ship-tel-'+gi)?.value||'';
     const note      = document.getElementById('pop-note-'+gi)?.value||'';
 
-    // 納期を資材行マップに記録
+    // 納期を資材行マップに記録（ポップアップを閉じる前に取得）
     supRows.forEach(r=>{ deliveryMap[r.product_name+(r.spec||'')] = delivery; });
 
     let grandAmt=0;
@@ -2070,12 +2070,12 @@ async function generateMaterialOrderPDF() {
           const mc=r['col'+n+'_matcode']||'';
           if(mc){colorDesc=mc;break;}
         }
+        // 対応サイズ列は不要なので削除
         detailRows.push(`<tr>
           <td style="font-family:monospace;font-size:8pt">${esc(r.product_no||'')}</td>
           <td>${esc(r.product_name||'')}</td>
           <td>${esc(r.spec||'')}</td>
           <td>${esc(colorDesc)}</td>
-          <td>${esc(r.applicable_sizes||'全サイズ')}</td>
           <td style="text-align:right">${qty.toLocaleString()}</td>
           <td>${esc(r.unit||'')}</td>
           <td style="text-align:right">${price?price.toLocaleString()+'円':''}</td>
@@ -2094,22 +2094,22 @@ async function generateMaterialOrderPDF() {
       <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. / TEL:075-755-7973</div></div>
       <div><div class="doc-title">資 材 発 注 書（${esc(orderType)}）</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
     </div>
-    <!-- 発注先・出荷先・納期 -->
+    <!-- 発注先・納期・出荷先 -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd">
       <div>
         <div class="sec-title">発注先</div>
         <div style="font-size:11pt;font-weight:700">${esc(sup)}</div>
       </div>
       <div>
-        <div class="sec-title" style="color:#CC2A2A">納期</div>
-        <div style="font-size:13pt;font-weight:700;color:#CC2A2A">${esc(delivery)||'未設定'}</div>
+        <div class="sec-title">納期</div>
+        <div style="font-size:13pt;font-weight:700">${esc(delivery)||'未設定'}</div>
       </div>
     </div>
     ${shipName?`<div style="margin-bottom:8pt;padding:6pt;background:#EEF2FD;border-radius:4pt;font-size:8.5pt">
-      <div style="font-weight:700;color:#2B5CE6;margin-bottom:3pt">🚚 出荷先</div>
-      <div style="font-weight:700">${esc(shipName)}</div>
-      ${shipZip?`<div>〒${esc(shipZip)}</div>`:''}
-      ${shipAddr?`<div>${esc(shipAddr)}</div>`:''}
+      <div style="font-weight:700;color:#2B5CE6;margin-bottom:4pt">🚚 出荷先</div>
+      <div style="font-weight:700;font-size:10pt;margin-bottom:2pt">${esc(shipName)}</div>
+      ${shipZip?`<div style="word-break:break-all;white-space:normal">〒${esc(shipZip)}</div>`:''}
+      ${shipAddr?`<div style="word-break:break-all;white-space:normal;line-height:1.5">${esc(shipAddr)}</div>`:''}
       ${shipTel?`<div>TEL: ${esc(shipTel)}</div>`:''}
     </div>`:''}
     <!-- 品番情報 -->
@@ -2121,39 +2121,58 @@ async function generateMaterialOrderPDF() {
     <table>
       <thead><tr>
         <th style="width:56pt">品番</th><th>品名</th><th style="width:46pt">規格</th>
-        <th style="width:46pt">資材カラー</th><th style="width:46pt">対応サイズ</th>
+        <th style="width:46pt">資材カラー</th>
         <th style="width:36pt;text-align:right">数量</th><th style="width:20pt">単位</th>
-        <th style="width:46pt;text-align:right">単価</th><th style="width:54pt;text-align:right">金額</th>
+        <th style="width:50pt;text-align:right">単価</th><th style="width:60pt;text-align:right">金額</th>
       </tr></thead>
       <tbody>${detailRows.join('')}</tbody>
       <tfoot><tr class="total-row">
-        <td colspan="8" style="text-align:right;padding-right:8pt">合計金額</td>
+        <td colspan="7" style="text-align:right;padding-right:8pt">合計金額</td>
         <td style="text-align:right;font-size:11pt;font-weight:700">${grandAmt.toLocaleString()}円</td>
       </tr></tfoot>
     </table>
     ${note?`<div style="margin-top:8pt"><div class="sec-title">備考・指示事項</div>
     <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(note)}</div></div>`:''}
+    <!-- 付記 -->
+    <div style="margin-top:10pt;padding:8pt;border:0.5pt solid #ddd;border-radius:4pt;font-size:8pt;line-height:1.8">
+      ※ 出荷明細を出荷日に必ずFAXまたは担当者にメール連絡をお願い致します。<br>
+      ※ 生地は出荷時に必ず生地の表裏の表記をつけて出荷して下さい。<br>
+      ※ 出荷伝票/請求伝票に必ず本発注書下部の使用品番を明記して下さい。
+    </div>
+    <!-- 使用品番 -->
+    <div style="margin-top:8pt;padding:6pt;background:#F7F6F3;border-radius:4pt;font-size:8pt">
+      使用品番：${esc(p.brand_product_no||'')}　${esc(p.product_name||'')}　${esc(p.year||'')}${esc(p.season||'')}
+    </div>
     <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
-    <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書 / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
+    <div class="footer"><span>Raises Lab Co., Ltd. / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
     pageIdx++;
   }
 
+  // 先にポップアップを閉じてからDOMに転記
   document.getElementById('mat-order-ov')?.remove();
 
-  // 資材シートの納期を転記
-  _materialRows.forEach((_,idx)=>{
-    const name = getMF(idx,'product_name')||_materialRows[idx]?.product_name||'';
-    const spec  = getMF(idx,'spec')       ||_materialRows[idx]?.spec       ||'';
-    const key   = name+spec;
+  // 資材シートの納期を転記（ポップアップ閉じた後でもdeliveryMapは残っている）
+  _materialRows.forEach((row,idx)=>{
+    const name = row.product_name || getMF(idx,'product_name') || '';
+    const spec  = row.spec        || getMF(idx,'spec')         || '';
+    const key   = name + spec;
     if(deliveryMap[key]) {
+      // DOMに反映（資材シートが開いていれば）
       const delEl = document.querySelector(`[data-r="${idx}"][data-f="delivery_date"]`);
       if(delEl) delEl.value = deliveryMap[key];
-      if(_materialRows[idx]) _materialRows[idx].delivery_date = deliveryMap[key];
+      // _materialRowsにも保存
+      _materialRows[idx].delivery_date = deliveryMap[key];
     }
   });
 
+  // 納期が転記されたら自動保存
+  const hasDelivery = Object.keys(deliveryMap).length > 0;
+  if(hasDelivery && _materialRows.length > 0) {
+    await saveMaterialsData();
+  }
+
   openPrintWindow(pages,'資材発注書_'+p.brand_product_no);
-  toast('資材発注書を発行しました（納期を資材シートに転記済・履歴保存済）','success');
+  toast('資材発注書を発行しました（納期を資材シートに転記・保存済）','success');
 }
 // ===== マスタ管理 =====
 let _masterTab='supplier';
