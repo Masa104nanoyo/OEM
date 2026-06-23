@@ -1012,7 +1012,7 @@ async function onMatNameChange(idx) {
   }
 }
 
-// 規格変更時：その規格のカラー候補に絞り込む
+// 規格変更時：カラー候補を絞り込み＋既設定カラーの単価を再取得
 async function onMatSpecChange(idx) {
   const spec  = getMF(idx,'spec');
   const matId = _materialRows[idx]?._material_id;
@@ -1021,9 +1021,11 @@ async function onMatSpecChange(idx) {
   const cpRes = await api('material_color_prices.get', {material_id: matId});
   const items = cpRes?.items||[];
 
-  // 選択した規格でフィルター（規格が空なら全件）
+  // 選択した規格でフィルター
   const filtered = spec ? items.filter(c=>(c.spec||'')===spec) : items;
-  const colorDl  = document.getElementById('dl-mat-colors-'+idx);
+
+  // カラーdatalistを絞り込み更新
+  const colorDl = document.getElementById('dl-mat-colors-'+idx);
   if(colorDl) {
     const codes = [...new Set(filtered.map(c=>c.color_code).filter(Boolean))];
     colorDl.innerHTML = codes.map(code=>{
@@ -1031,6 +1033,22 @@ async function onMatSpecChange(idx) {
       return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
     }).join('');
   }
+
+  // 既に設定済みのカラーコードの単価を規格に合わせて再取得・更新
+  for(let n=1; n<=_matColorCols; n++) {
+    const code    = getMF(idx,'col'+n+'_matcode');
+    const priceEl = document.querySelector(`[data-r="${idx}"][data-f="col${n}_price"]`);
+    if(!code || !priceEl) continue;
+    // この規格×カラーコードの単価を検索
+    const matched = filtered.find(c=>c.color_code===code);
+    if(matched) {
+      priceEl.value = matched.unit_price||'';
+    } else {
+      priceEl.value = ''; // 規格が変わって対応なければクリア
+    }
+  }
+  calcRowTotal(idx);
+  toast('規格を変更しました。カラー単価を更新しました。','success');
 }
 async function onMatColorInput(idx, colNum) {
   const code  = getMF(idx,'col'+colNum+'_matcode');
