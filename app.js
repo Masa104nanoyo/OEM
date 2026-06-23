@@ -826,13 +826,17 @@ function appendMatRow(tbody, r, idx, supOpts) {
     <td><input type="text" data-r="${idx}" data-f="product_name" value="${esc(r.product_name||'')}" placeholder="品名" list="mat-names" style="min-width:130px" onchange="onMatNameChange(${idx})"></td>
     <td>
       <input type="text" data-r="${idx}" data-f="spec" value="${esc(r.spec||'')}" placeholder="規格" style="min-width:70px" list="dl-spec-${idx}">
-      <datalist id="dl-spec-${idx}"></datalist>
     </td>
     <td>
-      <input type="text" data-r="${idx}" data-f="applicable_sizes" value="${esc(r.applicable_sizes||'')}"
-        placeholder="S/M など" style="width:74px;font-size:11px"
-        title="対応サイズを / 区切りで入力。空欄=全サイズ" list="dl-sizes-${idx}">
-      <datalist id="dl-sizes-${idx}">${(_currentProduct.size_range||'').split('/').map(s=>`<option value="${esc(s.trim())}">`).join('')}</datalist>
+      <input type="text" data-r="${idx}" data-f="applicable_sizes"
+        value="${esc(r.applicable_sizes||'全サイズ')}"
+        placeholder="全サイズ" style="width:74px;font-size:11px"
+        title="対応サイズを / 区切りで入力。全サイズの場合は「全サイズ」または空欄"
+        list="dl-sizes-${idx}">
+      <datalist id="dl-sizes-${idx}">
+        <option value="全サイズ">
+        ${(_currentProduct?.size_range||'').split('/').map(s=>`<option value="${esc(s.trim())}">`).join('')}
+      </datalist>
     </td>
     <td><select data-r="${idx}" data-f="category" style="font-size:11px;width:100%">
       ${CATEGORIES.map(c=>`<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`).join('')}
@@ -862,6 +866,13 @@ function appendMatRow(tbody, r, idx, supOpts) {
     colorDl = document.createElement('datalist');
     colorDl.id = 'dl-mat-colors-'+idx;
     document.body.appendChild(colorDl);
+  }
+  // 規格datalistもbody直下に追加
+  let specDlBody = document.getElementById('dl-spec-'+idx);
+  if(!specDlBody) {
+    specDlBody = document.createElement('datalist');
+    specDlBody.id = 'dl-spec-'+idx;
+    document.body.appendChild(specDlBody);
   }
 
   // マスタが特定できる場合はカラー単価を非同期で読み込み
@@ -1007,24 +1018,28 @@ async function onMatNameChange(idx) {
   }
 }
 
-// カラーコード入力時：単価を自動入力
+// カラーコード入力時：単価を自動更新（訂正時も上書き）
 async function onMatColorInput(idx, colNum) {
-  const code   = getMF(idx,'col'+colNum+'_matcode');
-  const spec   = getMF(idx,'spec');
-  const matId  = _materialRows[idx]?._material_id;
-  if(!code||!matId) return;
+  const code  = getMF(idx,'col'+colNum+'_matcode');
+  const spec  = getMF(idx,'spec');
+  const matId = _materialRows[idx]?._material_id;
 
-  // specとcolor_codeで単価を検索
+  // コードが空になった場合は単価もクリア
+  const priceEl = document.querySelector(`[data-r="${idx}"][data-f="col${colNum}_price"]`);
+  if(!code) {
+    if(priceEl) { priceEl.value=''; calcRowTotal(idx); }
+    return;
+  }
+  if(!matId) return;
+
+  // spec + color_code で単価を検索して上書き
   const res = await api('material_color_prices.get_price', {
     material_id: matId, spec, color_code: code
   });
-  if(res?.item) {
-    const priceEl = document.querySelector(`[data-r="${idx}"][data-f="col${colNum}_price"]`);
-    if(priceEl && !priceEl.value) {
-      priceEl.value = res.item.unit_price||'';
-      calcRowTotal(idx);
-      toast(`Col.${colNum}の単価を自動入力しました（${res.item.unit_price}円）`,'success');
-    }
+  if(res?.item && priceEl) {
+    priceEl.value = res.item.unit_price||'';
+    calcRowTotal(idx);
+    toast(`Col.${colNum}の単価を更新しました（${res.item.unit_price}円）`,'success');
   }
 }
 
@@ -1773,7 +1788,7 @@ async function pdfMaterialOrder() {
   const calcOrderQty = (matRow) => {
     const usageQty  = parseFloat(matRow.usage_quantity)||0;
     const lossRate  = (parseFloat(matRow.loss_rate)||0)/100;
-    const appSizes  = (matRow.applicable_sizes||'').split('/').map(s=>s.trim()).filter(Boolean);
+    const appSizes = (matRow.applicable_sizes||'').split('/').map(s=>s.trim()).filter(s=>s&&s!=='全サイズ');
     const targetSizes = appSizes.length ? appSizes : allSizes;
 
     // 資材カラーコードでグループ化
