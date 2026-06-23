@@ -2156,7 +2156,7 @@ async function openMaterialForm(idx) {
         </tr></thead>
         <tbody id="sg-tbody-${gi}">
           ${items.map((cp,ci)=>`<tr>
-            <td style="padding:3px 4px"><input type="text" class="sg-code" data-gi="${gi}" placeholder="#115" value="${esc(cp.color_code||'')}" style="width:100%;font-size:11px" list="color-list-${gi}"></td>
+            <td style="padding:3px 4px"><input type="text" class="sg-code" data-gi="${gi}" placeholder="#115" value="${esc(cp.color_code||'')}" style="width:100%;font-size:11px"></td>
             <td style="padding:3px 4px"><input type="text" class="sg-cname" data-gi="${gi}" placeholder="ホワイト" value="${esc(cp.color_name||'')}" style="width:100%;font-size:11px"></td>
             <td style="padding:3px 4px"><input type="number" class="sg-price" data-gi="${gi}" placeholder="0" value="${esc(cp.unit_price||'')}" style="width:100%;font-size:11px;text-align:right"></td>
             <td style="padding:3px 4px"><input type="text" class="sg-memo" data-gi="${gi}" placeholder="" value="${esc(cp.memo||'')}" style="width:100%;font-size:11px"></td>
@@ -2164,7 +2164,6 @@ async function openMaterialForm(idx) {
           </tr>`).join('')}
         </tbody>
       </table>
-      <datalist id="color-list-${gi}">${_masters.colors.map(c=>`<option value="${esc(c.color_code)}">${esc(c.color_name_ja)}</option>`).join('')}</datalist>
       <button class="btn btn-secondary btn-sm" style="margin-top:6px;font-size:11px" onclick="addCpColorRow(${gi})">＋ カラーを追加</button>
     </div>`;
 
@@ -2228,7 +2227,6 @@ function addSpecGroup() {
       </tr></thead>
       <tbody id="sg-tbody-${gi}"></tbody>
     </table>
-    <datalist id="color-list-${gi}">${_masters.colors.map(c=>`<option value="${esc(c.color_code)}">${esc(c.color_name_ja)}</option>`).join('')}</datalist>
     <button class="btn btn-secondary btn-sm" style="margin-top:6px;font-size:11px" onclick="addCpColorRow(${gi})">＋ カラーを追加</button>`;
   container.appendChild(div);
   addCpColorRow(gi);
@@ -2239,7 +2237,7 @@ function addCpColorRow(gi) {
   const tbody = document.getElementById('sg-tbody-'+gi); if(!tbody) return;
   const tr = document.createElement('tr');
   tr.innerHTML=`
-    <td style="padding:3px 4px"><input type="text" class="sg-code" data-gi="${gi}" placeholder="#115" style="width:100%;font-size:11px" list="color-list-${gi}"></td>
+    <td style="padding:3px 4px"><input type="text" class="sg-code" data-gi="${gi}" placeholder="#115" style="width:100%;font-size:11px"></td>
     <td style="padding:3px 4px"><input type="text" class="sg-cname" data-gi="${gi}" placeholder="ホワイト" style="width:100%;font-size:11px"></td>
     <td style="padding:3px 4px"><input type="number" class="sg-price" data-gi="${gi}" placeholder="0" style="width:100%;font-size:11px;text-align:right"></td>
     <td style="padding:3px 4px"><input type="text" class="sg-memo" data-gi="${gi}" placeholder="" style="width:100%;font-size:11px"></td>
@@ -2282,7 +2280,7 @@ async function openMaterialFormWithColorPrices(m, matIdx) {
         </tr></thead>
         <tbody id="mepg-tbody-${gi}">
           ${items.map(cp=>`<tr>
-            <td style="padding:3px 4px"><input type="text" class="mepg-code" placeholder="#115" value="${esc(cp.color_code||'')}" style="width:100%;font-size:11px" list="mep-colors"></td>
+            <td style="padding:3px 4px"><input type="text" class="mepg-code" placeholder="#115" value="${esc(cp.color_code||'')}" style="width:100%;font-size:11px"></td>
             <td style="padding:3px 4px"><input type="text" class="mepg-cname" placeholder="ホワイト" value="${esc(cp.color_name||'')}" style="width:100%;font-size:11px"></td>
             <td style="padding:3px 4px"><input type="number" class="mepg-price" placeholder="0" value="${esc(cp.unit_price||'')}" style="width:100%;font-size:11px;text-align:right"></td>
             <td style="padding:3px 4px"><input type="text" class="mepg-memo" placeholder="" value="${esc(cp.memo||'')}" style="width:100%;font-size:11px"></td>
@@ -2312,7 +2310,6 @@ async function openMaterialFormWithColorPrices(m, matIdx) {
       <div class="form-group"><label>仕入先</label><select id="mep-sup">${supOpts}</select></div>
       <div class="form-group"><label>メーカー</label><input type="text" id="mep-maker" value="${esc(m?.maker_name||'')}"></div>
     </div>
-    <datalist id="mep-colors">${_masters.colors.map(c=>`<option value="${esc(c.color_code)}">${esc(c.color_name_ja)}</option>`).join('')}</datalist>
     <div style="margin-top:14px;border-top:1px solid var(--c-border);padding-top:12px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
         <h4 style="font-size:13px;font-weight:700">📐 規格 × 🎨 カラー別単価</h4>
@@ -2362,7 +2359,7 @@ function addMepColorRow(gi) {
   const tbody=document.getElementById('mepg-tbody-'+gi); if(!tbody) return;
   const tr=document.createElement('tr');
   tr.innerHTML=`
-    <td style="padding:3px 4px"><input type="text" class="mepg-code" placeholder="#115" style="width:100%;font-size:11px" list="mep-colors"></td>
+    <td style="padding:3px 4px"><input type="text" class="mepg-code" placeholder="#115" style="width:100%;font-size:11px"></td>
     <td style="padding:3px 4px"><input type="text" class="mepg-cname" placeholder="ホワイト" style="width:100%;font-size:11px"></td>
     <td style="padding:3px 4px"><input type="number" class="mepg-price" placeholder="0" style="width:100%;font-size:11px;text-align:right"></td>
     <td style="padding:3px 4px"><input type="text" class="mepg-memo" placeholder="" style="width:100%;font-size:11px"></td>
