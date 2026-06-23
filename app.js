@@ -831,12 +831,8 @@ function appendMatRow(tbody, r, idx, supOpts) {
       <input type="text" data-r="${idx}" data-f="applicable_sizes"
         value="${esc(r.applicable_sizes||'全サイズ')}"
         placeholder="全サイズ" style="width:74px;font-size:11px"
-        title="対応サイズを / 区切りで入力。全サイズの場合は「全サイズ」または空欄"
+        title="対応サイズを / 区切りで入力。全サイズは「全サイズ」"
         list="dl-sizes-${idx}">
-      <datalist id="dl-sizes-${idx}">
-        <option value="全サイズ">
-        ${(_currentProduct?.size_range||'').split('/').map(s=>`<option value="${esc(s.trim())}">`).join('')}
-      </datalist>
     </td>
     <td><select data-r="${idx}" data-f="category" style="font-size:11px;width:100%">
       ${CATEGORIES.map(c=>`<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`).join('')}
@@ -873,6 +869,17 @@ function appendMatRow(tbody, r, idx, supOpts) {
     specDlBody = document.createElement('datalist');
     specDlBody.id = 'dl-spec-'+idx;
     document.body.appendChild(specDlBody);
+  }
+  // 対応サイズdatalistもbody直下に追加
+  let sizesDl = document.getElementById('dl-sizes-'+idx);
+  if(!sizesDl) {
+    sizesDl = document.createElement('datalist');
+    sizesDl.id = 'dl-sizes-'+idx;
+    // 全サイズ + 製品のサイズ展開
+    const prodSizes = (_currentProduct?.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+    sizesDl.innerHTML = '<option value="全サイズ">' +
+      prodSizes.map(s=>`<option value="${esc(s)}">`).join('');
+    document.body.appendChild(sizesDl);
   }
 
   // マスタが特定できる場合はカラー単価を非同期で読み込み
@@ -1788,7 +1795,17 @@ async function pdfProcessSheet() {
 async function pdfMaterialOrder() {
   document.getElementById('pdf-menu').style.display='none';
 
-  // 資材シートが開いていない場合はデータ取得
+  // 現在の入力値を_materialRowsに保存してから処理
+  _materialRows.forEach((_,idx)=>{
+    _matFields.forEach(f=>{ if(_materialRows[idx]) _materialRows[idx][f]=getMF(idx,f)||_materialRows[idx][f]||''; });
+    for(let n=1;n<=_matColorCols;n++){
+      if(_materialRows[idx]) {
+        _materialRows[idx]['col'+n+'_matcode'] = getMF(idx,'col'+n+'_matcode')||_materialRows[idx]['col'+n+'_matcode']||'';
+        _materialRows[idx]['col'+n+'_price']   = getMF(idx,'col'+n+'_price')  ||_materialRows[idx]['col'+n+'_price']  ||'';
+      }
+    }
+  });
+
   let rows = _materialRows.filter(r=>r.product_name||r.product_no);
   if(!rows.length) {
     const res = await api('product_materials.get',{style_code:_currentProduct.style_code});
@@ -1815,17 +1832,18 @@ async function pdfMaterialOrder() {
     qtyMap[q.color_code][q.size_name] = Number(q.quantity)||0;
   });
 
-  // 計算関数
+  // 計算関数（matRowのデータを直接参照）
   const calcOrderQty = (matRow) => {
     const usageQty  = parseFloat(matRow.usage_quantity)||0;
     const lossRate  = (parseFloat(matRow.loss_rate)||0)/100;
-    const appSizes = (matRow.applicable_sizes||'').split('/').map(s=>s.trim()).filter(s=>s&&s!=='全サイズ');
+    const appStr    = matRow.applicable_sizes||'';
+    const appSizes  = appStr.split('/').map(s=>s.trim()).filter(s=>s&&s!=='全サイズ');
     const targetSizes = appSizes.length ? appSizes : allSizes;
 
-    // 資材カラーコードでグループ化
-    const matColorGroups = {}; // {matcode: [{colIdx, prodColor}]}
+    // 資材カラーコードでグループ化（_materialRowsのデータを直接使用）
+    const matColorGroups = {};
     for(let n=1;n<=7;n++){
-      const mc = matRow['col'+n+'_matcode']||getMF(_materialRows.indexOf(matRow),'col'+n+'_matcode')||'';
+      const mc = matRow['col'+n+'_matcode']||'';
       if(!mc) continue;
       const pc = prodColors[n-1];
       if(!pc) continue;
@@ -1833,35 +1851,24 @@ async function pdfMaterialOrder() {
       matColorGroups[mc].push({colIdx:n, prodColor:pc});
     }
 
-    // 各資材カラーグループの発注数量を計算
     const results = [];
     Object.entries(matColorGroups).forEach(([matCode, cols])=>{
-      // 同じ資材カラーに紐づく製品カラーの数量を合算
       let totalQty = 0;
       const prodColorNames = [];
       cols.forEach(({prodColor})=>{
         prodColorNames.push(prodColor.name);
         const sizeQty = qtyMap[prodColor.code]||{};
-        targetSizes.forEach(sz=>{
-          totalQty += Number(sizeQty[sz]||0);
-        });
+        targetSizes.forEach(sz=>{ totalQty += Number(sizeQty[sz]||0); });
       });
       const orderQty = Math.ceil(totalQty * usageQty * (1+lossRate));
       const price = parseFloat(matRow['col'+cols[0].colIdx+'_price'])||0;
-      results.push({
-        matCode,
-        prodColorNames: prodColorNames.join('・'),
-        totalQty,
-        orderQty,
-        price,
-        amount: orderQty * price,
-      });
+      results.push({matCode, prodColorNames:prodColorNames.join('・'), totalQty, orderQty, price, amount:orderQty*price});
     });
 
-    // カラー設定がない場合は全カラー合計
+    // カラー設定なし→全カラー合計
     if(!results.length) {
       let totalQty = 0;
-      allSizes.forEach(sz=>{ prodColors.forEach(pc=>{ totalQty += Number((qtyMap[pc.code]||{})[sz]||0); }); });
+      targetSizes.forEach(sz=>{ prodColors.forEach(pc=>{ totalQty += Number((qtyMap[pc.code]||{})[sz]||0); }); });
       const orderQty = Math.ceil(totalQty * usageQty * (1+lossRate));
       results.push({matCode:'', prodColorNames:'全カラー', totalQty, orderQty, price:0, amount:0});
     }
@@ -1871,52 +1878,51 @@ async function pdfMaterialOrder() {
   // 仕入先でグループ化
   const supplierGroups = {};
   targetRows.forEach(r=>{
-    const sup = r.supplier_name||getMF(_materialRows.indexOf(r),'supplier_name')||'未設定';
+    const sup = r.supplier_name||'未設定';
     if(!supplierGroups[sup]) supplierGroups[sup]=[];
     supplierGroups[sup].push(r);
   });
 
-  // 単価・数量入力ポップアップ
+  // ポップアップ表示
   const ov = document.createElement('div');
   ov.id='mat-order-ov';
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
 
-  let popHtml = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:700px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+  let popHtml = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:720px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
     <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">📦 資材発注書 — 数量・単価確認</h3>
-    <p style="font-size:11px;color:var(--c-text2);margin-bottom:14px">自動計算された数量・単価を確認・訂正してから発注書を発行してください</p>`;
+    <p style="font-size:11px;color:var(--c-text2);margin-bottom:14px">自動計算値を確認・訂正してから発注書を発行してください</p>`;
 
-  Object.entries(supplierGroups).forEach(([sup, rows], gi)=>{
+  Object.entries(supplierGroups).forEach(([sup, supRows], gi)=>{
     popHtml += `<div style="margin-bottom:16px;border:1px solid var(--c-border);border-radius:8px;padding:12px">
       <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--c-primary)">【発注先: ${esc(sup)}】</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="background:var(--c-bg)">
-          <th style="padding:4px 6px;text-align:left;border-bottom:0.5px solid var(--c-border)">品番</th>
-          <th style="padding:4px 6px;text-align:left;border-bottom:0.5px solid var(--c-border)">品名</th>
-          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">規格</th>
-          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">対象カラー</th>
-          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">対応サイズ</th>
-          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">数量</th>
-          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">単位</th>
-          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">単価</th>
-          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">金額</th>
+          <th style="padding:4px 6px;text-align:left">品番</th>
+          <th style="padding:4px 6px;text-align:left">品名</th>
+          <th style="padding:4px 6px">規格</th>
+          <th style="padding:4px 6px">資材カラー／製品カラー</th>
+          <th style="padding:4px 6px">サイズ</th>
+          <th style="padding:4px 6px;text-align:right">数量</th>
+          <th style="padding:4px 6px">単位</th>
+          <th style="padding:4px 6px;text-align:right">単価</th>
+          <th style="padding:4px 6px;text-align:right">金額</th>
         </tr></thead>
-        <tbody id="pop-tbody-${gi}">`;
+        <tbody>`;
 
-    rows.forEach((r,ri)=>{
+    supRows.forEach((r,ri)=>{
       const results = calcOrderQty(r);
       results.forEach((res,resi)=>{
         const rowId = `r${gi}_${ri}_${resi}`;
-        popHtml += `<tr>
+        popHtml += `<tr style="border-bottom:0.5px solid var(--c-border)">
           <td style="padding:3px 5px;font-family:monospace;font-size:10px">${esc(r.product_no||'')}</td>
           <td style="padding:3px 5px">${esc(r.product_name||'')}</td>
           <td style="padding:3px 5px">${esc(r.spec||'')}</td>
-          <td style="padding:3px 5px">${esc(res.matCode?res.matCode+' ':'')}${esc(res.prodColorNames)}</td>
-          <td style="padding:3px 5px">${esc(r.applicable_sizes||'全')}
-          </td>
-          <td style="padding:3px 2px"><input type="number" id="pop-qty-${rowId}" value="${res.orderQty}" min="0" style="width:65px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')"></td>
+          <td style="padding:3px 5px">${esc(res.matCode||'')}${res.matCode?' / ':''}<span style="color:var(--c-text2)">${esc(res.prodColorNames)}</span></td>
+          <td style="padding:3px 5px;font-size:10px">${esc(r.applicable_sizes||'全サイズ')}</td>
+          <td style="padding:2px"><input type="number" id="pop-qty-${rowId}" value="${res.orderQty}" min="0" style="width:60px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')"></td>
           <td style="padding:3px 5px">${esc(r.unit||'')}</td>
-          <td style="padding:3px 2px"><input type="number" id="pop-price-${rowId}" value="${res.price||0}" min="0" style="width:70px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')"></td>
-          <td style="padding:3px 5px;text-align:right;font-weight:600" id="pop-amt-${rowId}">${(res.orderQty*(res.price||0)).toLocaleString()}円</td>
+          <td style="padding:2px"><input type="number" id="pop-price-${rowId}" value="${res.price||''}" min="0" style="width:70px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')" placeholder="単価"></td>
+          <td style="padding:3px 5px;text-align:right;font-weight:600" id="pop-amt-${rowId}">${res.amount?res.amount.toLocaleString()+'円':'-'}</td>
         </tr>`;
       });
     });
@@ -1934,9 +1940,7 @@ async function pdfMaterialOrder() {
 
   ov.innerHTML = popHtml;
   document.body.appendChild(ov);
-  ov.addEventListener('click',e=>{if(e.target===ov) ov.remove();});
-
-  // グループ情報を保持
+  // ★ 背景クリックでは閉じない（行消失防止）
   window._matOrderGroups = supplierGroups;
 }
 
