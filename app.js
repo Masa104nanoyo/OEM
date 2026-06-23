@@ -746,6 +746,7 @@ async function renderMaterialsTab() {
           <th rowspan="2" style="min-width:100px">仕入先</th>
           <th rowspan="2" style="min-width:80px">メーカー</th>
           <th rowspan="2" style="min-width:80px">メモ</th>
+          <th rowspan="2" style="width:90px;background:#EEF2FD;color:#2B5CE6">📅 資材納期</th>
           <th rowspan="2" style="width:56px">操作</th>
         </tr>
         <tr>${colorSubHeaders}</tr>
@@ -785,7 +786,7 @@ function addMatColorColNew() {
 }
 
 const _matFields = ['product_no','product_name','spec','applicable_sizes','category','usage_location',
-  'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo',
+  'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo','delivery_date',
   'col1_matcode','col1_price','col2_matcode','col2_price','col3_matcode','col3_price',
   'col4_matcode','col4_price','col5_matcode','col5_price','col6_matcode','col6_price','col7_matcode','col7_price'];
 
@@ -849,6 +850,7 @@ function appendMatRow(tbody, r, idx, supOpts) {
     </select></td>
     <td><input type="text" data-r="${idx}" data-f="maker_name" value="${esc(r.maker_name||'')}" placeholder="メーカー" style="min-width:70px"></td>
     <td><input type="text" data-r="${idx}" data-f="memo"       value="${esc(r.memo||'')}"       placeholder="メモ"     style="min-width:70px"></td>
+    <td><input type="date" data-r="${idx}" data-f="delivery_date" value="${esc(r.delivery_date||'')}" style="width:88px;font-size:11px;color:#2B5CE6;font-weight:600" title="資材納期"></td>
     <td style="text-align:center;white-space:nowrap">
       <div id="rp-${idx}" style="font-size:10px;font-weight:600;color:var(--c-primary);margin-bottom:2px">-</div>
       <button class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 5px;margin-bottom:2px" onclick="editMatMaster(${idx})" title="マスタ編集">✏️</button>
@@ -1888,19 +1890,70 @@ async function pdfMaterialOrder() {
   ov.id='mat-order-ov';
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
 
-  let popHtml = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:720px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
-    <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">📦 資材発注書 — 数量・単価確認</h3>
-    <p style="font-size:11px;color:var(--c-text2);margin-bottom:14px">自動計算値を確認・訂正してから発注書を発行してください</p>`;
+  // 出荷先候補（自社 + 仕入先 + 得意先）
+  const SELF = {name:'Raises Lab Co., Ltd.（自社）', zip:'615-0000', address:'京都市右京区西京極...', tel:'075-755-7973'};
+  const shipCandidates = [
+    SELF,
+    ..._masters.partners.map(p=>({name:p.partner_name, zip:p.zip||'', address:p.address||'', tel:p.tel||''})),
+    ..._masters.customers.map(c=>({name:c.customer_name, zip:c.zip||'', address:c.address||'', tel:c.tel||''})),
+  ];
+  const shipDatalist = shipCandidates.map(s=>`<option value="${esc(s.name)}">`).join('');
+  window._shipCandidates = shipCandidates;
+
+  let popHtml = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:760px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">📦 資材発注書 — 発注内容確認</h3>
+    <p style="font-size:11px;color:var(--c-text2);margin-bottom:14px">数量・単価を確認・訂正してから発注書を発行してください</p>
+    <datalist id="ship-list">${shipDatalist}</datalist>`;
 
   Object.entries(supplierGroups).forEach(([sup, supRows], gi)=>{
-    popHtml += `<div style="margin-bottom:16px;border:1px solid var(--c-border);border-radius:8px;padding:12px">
-      <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--c-primary)">【発注先: ${esc(sup)}】</div>
+    popHtml += `<div style="margin-bottom:20px;border:1.5px solid var(--c-border);border-radius:10px;padding:14px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:var(--c-primary)">【発注先: ${esc(sup)}】</div>
+
+      <!-- ヘッダー入力エリア -->
+      <div style="display:grid;grid-template-columns:100px 1fr 1fr 100px;gap:10px;margin-bottom:12px;padding:10px;background:var(--c-bg);border-radius:6px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--c-text2)">サンプル/量産</label>
+          <select id="pop-type-${gi}" style="width:100%;margin-top:4px;font-size:12px;font-weight:600">
+            <option value="量産">量産</option>
+            <option value="サンプル">サンプル</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#CC2A2A">📅 納期 ★</label>
+          <input type="date" id="pop-delivery-${gi}" style="width:100%;margin-top:4px;font-size:13px;font-weight:700;color:#CC2A2A;border:1.5px solid #CC2A2A;border-radius:4px;padding:4px 6px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#2B5CE6">🚚 出荷先 ★</label>
+          <input type="text" id="pop-ship-name-${gi}" placeholder="出荷先名" list="ship-list" style="width:100%;margin-top:4px;font-size:12px;font-weight:600;border:1.5px solid #2B5CE6;border-radius:4px;padding:4px 6px" oninput="onShipNameInput(${gi})">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--c-text2)">備考</label>
+          <input type="text" id="pop-note-${gi}" placeholder="指示事項など" style="width:100%;margin-top:4px;font-size:12px">
+        </div>
+      </div>
+      <!-- 出荷先詳細 -->
+      <div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;margin-bottom:12px" id="pop-ship-detail-${gi}">
+        <div>
+          <label style="font-size:10px;color:var(--c-text2)">郵便番号</label>
+          <input type="text" id="pop-ship-zip-${gi}" placeholder="0000000" maxlength="8" style="width:100%;font-size:11px" oninput="onShipZipInput(${gi})">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--c-text2)">住所</label>
+          <input type="text" id="pop-ship-addr-${gi}" placeholder="住所" style="width:100%;font-size:11px">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--c-text2)">TEL</label>
+          <input type="text" id="pop-ship-tel-${gi}" placeholder="TEL" style="width:100%;font-size:11px">
+        </div>
+      </div>
+
+      <!-- 明細テーブル -->
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="background:var(--c-bg)">
           <th style="padding:4px 6px;text-align:left">品番</th>
           <th style="padding:4px 6px;text-align:left">品名</th>
           <th style="padding:4px 6px">規格</th>
-          <th style="padding:4px 6px">資材カラー／製品カラー</th>
+          <th style="padding:4px 6px">資材カラー/製品カラー</th>
           <th style="padding:4px 6px">サイズ</th>
           <th style="padding:4px 6px;text-align:right">数量</th>
           <th style="padding:4px 6px">単位</th>
@@ -1948,7 +2001,34 @@ function updatePopAmount(rowId) {
   const qty   = parseFloat(document.getElementById('pop-qty-'+rowId)?.value)||0;
   const price = parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
   const el    = document.getElementById('pop-amt-'+rowId);
-  if(el) el.textContent = Math.round(qty*price).toLocaleString()+'円';
+  if(el) el.textContent = qty&&price ? Math.round(qty*price).toLocaleString()+'円' : '-';
+}
+
+function onShipNameInput(gi) {
+  const name = document.getElementById('pop-ship-name-'+gi)?.value||'';
+  const found = (window._shipCandidates||[]).find(s=>s.name===name);
+  if(found) {
+    const z = document.getElementById('pop-ship-zip-'+gi);
+    const a = document.getElementById('pop-ship-addr-'+gi);
+    const t = document.getElementById('pop-ship-tel-'+gi);
+    if(z && !z.value) z.value = found.zip||'';
+    if(a && !a.value) a.value = found.address||'';
+    if(t && !t.value) t.value = found.tel||'';
+  }
+}
+
+async function onShipZipInput(gi) {
+  const zip = (document.getElementById('pop-ship-zip-'+gi)?.value||'').replace(/[^0-9]/g,'');
+  if(zip.length!==7) return;
+  try {
+    const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${zip}`);
+    const data = await res.json();
+    if(data.results) {
+      const r=data.results[0];
+      const a=document.getElementById('pop-ship-addr-'+gi);
+      if(a && !a.value) a.value=r.address1+r.address2+r.address3;
+    }
+  } catch(e){}
 }
 
 async function generateMaterialOrderPDF() {
@@ -1956,38 +2036,46 @@ async function generateMaterialOrderPDF() {
   const groups = window._matOrderGroups||{};
   let pages='', pageIdx=0;
   const totalPages = Object.keys(groups).length;
+  // 納期を資材行に転記するためのマップ {product_name+spec: delivery_date}
+  const deliveryMap = {};
 
-  for(const [sup, rows] of Object.entries(groups)) {
+  for(const [sup, supRows] of Object.entries(groups)) {
+    const gi = Object.keys(groups).indexOf(sup);
     const noRes = await api('order_no.generate',{type:'M'});
-    const orderNo = noRes?.order_no||'RL-M-??????';
+    const orderNo   = noRes?.order_no||'RL-M-??????';
+    const orderType = document.getElementById('pop-type-'+gi)?.value||'量産';
+    const delivery  = document.getElementById('pop-delivery-'+gi)?.value||'';
+    const shipName  = document.getElementById('pop-ship-name-'+gi)?.value||'';
+    const shipZip   = document.getElementById('pop-ship-zip-'+gi)?.value||'';
+    const shipAddr  = document.getElementById('pop-ship-addr-'+gi)?.value||'';
+    const shipTel   = document.getElementById('pop-ship-tel-'+gi)?.value||'';
+    const note      = document.getElementById('pop-note-'+gi)?.value||'';
 
-    // 明細行を収集
+    // 納期を資材行マップに記録
+    supRows.forEach(r=>{ deliveryMap[r.product_name+(r.spec||'')] = delivery; });
+
     let grandAmt=0;
-    const detailRows = [];
-    rows.forEach((r,ri)=>{
-      // ポップアップの値を読む
-      const results = [];
+    const detailRows=[];
+    supRows.forEach((r,ri)=>{
       for(let resi=0;;resi++){
-        const rowId = `r${Object.keys(groups).indexOf(sup)}_${ri}_${resi}`;
-        const qtyEl = document.getElementById('pop-qty-'+rowId);
+        const rowId=`r${gi}_${ri}_${resi}`;
+        const qtyEl=document.getElementById('pop-qty-'+rowId);
         if(!qtyEl) break;
-        const qty   = parseFloat(qtyEl.value)||0;
-        const price = parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
-        const amt   = Math.round(qty*price);
-        grandAmt += amt;
-        const appSizes = r.applicable_sizes||'全サイズ';
-        // カラー情報
-        let colorDesc = '';
+        const qty=parseFloat(qtyEl.value)||0;
+        const price=parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
+        const amt=Math.round(qty*price);
+        grandAmt+=amt;
+        let colorDesc='';
         for(let n=1;n<=7;n++){
-          const mc = r['col'+n+'_matcode']||getMF(_materialRows.indexOf(r),'col'+n+'_matcode')||'';
-          if(mc) { colorDesc = mc; break; }
+          const mc=r['col'+n+'_matcode']||'';
+          if(mc){colorDesc=mc;break;}
         }
         detailRows.push(`<tr>
           <td style="font-family:monospace;font-size:8pt">${esc(r.product_no||'')}</td>
           <td>${esc(r.product_name||'')}</td>
           <td>${esc(r.spec||'')}</td>
           <td>${esc(colorDesc)}</td>
-          <td>${esc(appSizes)}</td>
+          <td>${esc(r.applicable_sizes||'全サイズ')}</td>
           <td style="text-align:right">${qty.toLocaleString()}</td>
           <td>${esc(r.unit||'')}</td>
           <td style="text-align:right">${price?price.toLocaleString()+'円':''}</td>
@@ -1996,27 +2084,43 @@ async function generateMaterialOrderPDF() {
       }
     });
 
-    // 履歴保存
     await api('order_history.save',{
-      order_no:orderNo, order_type:'資材発注', style_code:p.style_code,
-      supplier_name:sup, process_names:'', total_qty:0, total_amount:grandAmt, memo:''
+      order_no:orderNo, order_type:`資材発注(${orderType})`, style_code:p.style_code,
+      supplier_name:sup, process_names:'', total_qty:0, total_amount:grandAmt, memo:note
     });
 
-    pages += `${pageIdx>0?'<div class="page-break"></div>':''}
+    pages+=`${pageIdx>0?'<div class="page-break"></div>':''}
     <div class="header">
-      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd.</div></div>
-      <div><div class="doc-title">資 材 発 注 書</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
+      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. / TEL:075-755-7973</div></div>
+      <div><div class="doc-title">資 材 発 注 書（${esc(orderType)}）</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd;font-size:8.5pt">
-      <div class="info-row"><span class="lbl">発注先：</span><span class="val" style="font-weight:700;font-size:11pt">${esc(sup)}</span></div>
+    <!-- 発注先・出荷先・納期 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd">
+      <div>
+        <div class="sec-title">発注先</div>
+        <div style="font-size:11pt;font-weight:700">${esc(sup)}</div>
+      </div>
+      <div>
+        <div class="sec-title" style="color:#CC2A2A">納期</div>
+        <div style="font-size:13pt;font-weight:700;color:#CC2A2A">${esc(delivery)||'未設定'}</div>
+      </div>
+    </div>
+    ${shipName?`<div style="margin-bottom:8pt;padding:6pt;background:#EEF2FD;border-radius:4pt;font-size:8.5pt">
+      <div style="font-weight:700;color:#2B5CE6;margin-bottom:3pt">🚚 出荷先</div>
+      <div style="font-weight:700">${esc(shipName)}</div>
+      ${shipZip?`<div>〒${esc(shipZip)}</div>`:''}
+      ${shipAddr?`<div>${esc(shipAddr)}</div>`:''}
+      ${shipTel?`<div>TEL: ${esc(shipTel)}</div>`:''}
+    </div>`:''}
+    <!-- 品番情報 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;font-size:8.5pt">
       <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
       <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
-      <div class="info-row"><span class="lbl">納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(p.delivery_date||'')}</span></div>
     </div>
     <div class="sec-title">発注明細</div>
     <table>
       <thead><tr>
-        <th style="width:56pt">品番</th><th>品名</th><th style="width:50pt">規格</th>
+        <th style="width:56pt">品番</th><th>品名</th><th style="width:46pt">規格</th>
         <th style="width:46pt">資材カラー</th><th style="width:46pt">対応サイズ</th>
         <th style="width:36pt;text-align:right">数量</th><th style="width:20pt">単位</th>
         <th style="width:46pt;text-align:right">単価</th><th style="width:54pt;text-align:right">金額</th>
@@ -2027,18 +2131,30 @@ async function generateMaterialOrderPDF() {
         <td style="text-align:right;font-size:11pt;font-weight:700">${grandAmt.toLocaleString()}円</td>
       </tr></tfoot>
     </table>
-    <div style="margin-top:10pt"><div class="sec-title">備考・指示事項</div>
-    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;min-height:36pt;color:#888;font-size:8.5pt"></div></div>
+    ${note?`<div style="margin-top:8pt"><div class="sec-title">備考・指示事項</div>
+    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(note)}</div></div>`:''}
     <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
     <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書 / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
     pageIdx++;
   }
 
   document.getElementById('mat-order-ov')?.remove();
-  openPrintWindow(pages,'資材発注書_'+p.brand_product_no);
-  toast('資材発注書を発行しました（履歴保存済）','success');
-}
 
+  // 資材シートの納期を転記
+  _materialRows.forEach((_,idx)=>{
+    const name = getMF(idx,'product_name')||_materialRows[idx]?.product_name||'';
+    const spec  = getMF(idx,'spec')       ||_materialRows[idx]?.spec       ||'';
+    const key   = name+spec;
+    if(deliveryMap[key]) {
+      const delEl = document.querySelector(`[data-r="${idx}"][data-f="delivery_date"]`);
+      if(delEl) delEl.value = deliveryMap[key];
+      if(_materialRows[idx]) _materialRows[idx].delivery_date = deliveryMap[key];
+    }
+  });
+
+  openPrintWindow(pages,'資材発注書_'+p.brand_product_no);
+  toast('資材発注書を発行しました（納期を資材シートに転記済・履歴保存済）','success');
+}
 // ===== マスタ管理 =====
 let _masterTab='supplier';
 function renderMastersPage(main) {
