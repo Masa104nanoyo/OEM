@@ -845,28 +845,36 @@ function appendMatRow(tbody, r, idx, supOpts) {
     </td>`;
   tbody.appendChild(tr);
 
-  // カラーdatalistをbody直下に追加（tdの外に置かないとlist属性が効かない）
-  let dl = document.getElementById('dl-mat-colors-'+idx);
-  if(!dl) {
-    dl = document.createElement('datalist');
-    dl.id = 'dl-mat-colors-'+idx;
-    document.body.appendChild(dl);
+  // カラーdatalistをbody直下に追加（list属性はbody直下のdatalistのみ有効）
+  let colorDl = document.getElementById('dl-mat-colors-'+idx);
+  if(!colorDl) {
+    colorDl = document.createElement('datalist');
+    colorDl.id = 'dl-mat-colors-'+idx;
+    document.body.appendChild(colorDl);
   }
-  // マスタにカラー情報があれば初期設定
-  if(matMaster) {
-    api('material_color_prices.get',{material_id:matMaster.material_id}).then(res=>{
+
+  // マスタが特定できる場合はカラー単価を非同期で読み込み
+  if(matMaster?.material_id) {
+    if(_materialRows[idx]) _materialRows[idx]._material_id = matMaster.material_id;
+    api('material_color_prices.get', {material_id: matMaster.material_id}).then(res=>{
       const items = res?.items||[];
-      if(dl) dl.innerHTML = [...new Set(items.map(c=>c.color_code).filter(Boolean))].map(code=>{
-        const found=items.find(x=>x.color_code===code);
-        return `<option value="${esc(code)}">${esc(found?.color_name||'')} ${found?.unit_price?'('+found.unit_price+'円)':''}`;
-      }).join('');
-      if(_materialRows[idx]) _materialRows[idx]._material_id = matMaster.material_id;
-      // 規格リストも更新
-      const specDl = document.getElementById('dl-spec-'+idx);
-      if(specDl) {
-        const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
-        specDl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
-      }
+  // カラーdatalist更新（資材マスタに登録済みのコード+カラー名が候補に出る）
+  const codes = [...new Set(items.map(c=>c.color_code).filter(Boolean))];
+  colorDl.innerHTML = codes.map(code=>{
+    const found = items.find(x=>x.color_code===code);
+    return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
+  }).join('');
+  // 規格datalist更新
+  const specDl = document.getElementById('dl-spec-'+idx);
+  if(specDl) {
+    const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
+    specDl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
+    // 規格が1種類なら自動入力
+    if(specs.length===1) {
+      const specEl = document.querySelector(`[data-r="${idx}"][data-f="spec"]`);
+      if(specEl && !specEl.value) specEl.value = specs[0];
+    }
+  }
     });
   }
 
@@ -949,36 +957,43 @@ async function onMatNameChange(idx) {
   if(!mat) return;
 
   // 品番・仕入先・メーカーを自動入力
-  const noEl  = document.querySelector(`[data-r="${idx}"][data-f="product_no"]`);
-  const supEl = document.querySelector(`[data-r="${idx}"][data-f="supplier_name"]`);
-  const makEl = document.querySelector(`[data-r="${idx}"][data-f="maker_name"]`);
-  if(noEl  && !noEl.value)  noEl.value  = mat.product_no||'';
-  if(supEl && !supEl.value) supEl.value = mat.supplier_name||'';
-  if(makEl && !makEl.value) makEl.value = mat.maker_name||'';
+  const setIfEmpty = (f, val) => {
+    const el = document.querySelector(`[data-r="${idx}"][data-f="${f}"]`);
+    if(el && !el.value && val) el.value = val;
+  };
+  setIfEmpty('product_no',    mat.product_no||'');
+  setIfEmpty('supplier_name', mat.supplier_name||'');
+  setIfEmpty('maker_name',    mat.maker_name||'');
 
-  // 規格リストを取得
-  const specRes = await api('material_color_prices.get_specs', {material_id:mat.material_id});
-  const specs   = specRes?.specs||[];
-  const specDl  = document.getElementById('spec-list-'+idx);
-  if(specDl) {
-    specDl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
-  }
+  // material_idを保存
+  if(_materialRows[idx]) _materialRows[idx]._material_id = mat.material_id;
 
-  // カラー単価を取得してキャッシュ
+  // カラー単価・規格をマスタから取得
   const cpRes = await api('material_color_prices.get', {material_id:mat.material_id});
   const cp    = cpRes?.items||[];
-  // mat-colors datalistにカラーコードを登録
-  const colDl = document.getElementById('mat-colors-'+idx);
-  if(colDl) {
-    const codes = [...new Set(cp.map(c=>c.color_code).filter(Boolean))];
-    colDl.innerHTML = codes.map(c=>{
-      const found = cp.find(x=>x.color_code===c);
-      return `<option value="${esc(c)}">${esc(found?.color_name||'')} - ${found?.unit_price||0}円</option>`;
-    }).join('');
+
+  // 規格datalistを更新（dl-spec-${idx}）
+  const specDl2 = document.getElementById('dl-spec-'+idx);
+  if(specDl2) {
+    const specs = [...new Set(cp.map(c=>c.spec||'').filter(Boolean))];
+    specDl2.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
+    // 規格が1種類だけなら自動入力
+    if(specs.length===1) {
+      const specEl = document.querySelector(`[data-r="${idx}"][data-f="spec"]`);
+      if(specEl && !specEl.value) specEl.value = specs[0];
+    }
   }
 
-  // _materialRowsにmaterial_idを保存（単価検索用）
-  if(_materialRows[idx]) _materialRows[idx]._material_id = mat.material_id;
+  // カラーdatalistを更新（dl-mat-colors-${idx}）
+  // マスタに登録された資材カラーコード・カラー名が候補に出る（自由入力も可能）
+  const colorDl2 = document.getElementById('dl-mat-colors-'+idx);
+  if(colorDl2) {
+    const codes = [...new Set(cp.map(c=>c.color_code).filter(Boolean))];
+    colorDl2.innerHTML = codes.map(code=>{
+      const found = cp.find(x=>x.color_code===code);
+      return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
+    }).join('');
+  }
 }
 
 // カラーコード入力時：単価を自動入力
