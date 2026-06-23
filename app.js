@@ -825,7 +825,7 @@ function appendMatRow(tbody, r, idx, supOpts) {
     <td><input type="text" data-r="${idx}" data-f="product_no"   value="${esc(r.product_no||'')}"   placeholder="品番" style="min-width:80px"></td>
     <td><input type="text" data-r="${idx}" data-f="product_name" value="${esc(r.product_name||'')}" placeholder="品名" list="mat-names" style="min-width:130px" onchange="onMatNameChange(${idx})"></td>
     <td>
-      <input type="text" data-r="${idx}" data-f="spec" value="${esc(r.spec||'')}" placeholder="規格" style="min-width:70px" list="dl-spec-${idx}">
+      <input type="text" data-r="${idx}" data-f="spec" value="${esc(r.spec||'')}" placeholder="規格" style="min-width:70px" list="dl-spec-${idx}" onchange="onMatSpecChange(${idx})">
     </td>
     <td>
       <input type="text" data-r="${idx}" data-f="applicable_sizes"
@@ -880,23 +880,21 @@ function appendMatRow(tbody, r, idx, supOpts) {
     if(_materialRows[idx]) _materialRows[idx]._material_id = matMaster.material_id;
     api('material_color_prices.get', {material_id: matMaster.material_id}).then(res=>{
       const items = res?.items||[];
-  // カラーdatalist更新（資材マスタに登録済みのコード+カラー名が候補に出る）
-  const codes = [...new Set(items.map(c=>c.color_code).filter(Boolean))];
-  colorDl.innerHTML = codes.map(code=>{
-    const found = items.find(x=>x.color_code===code);
-    return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
-  }).join('');
-  // 規格datalist更新
-  const specDl = document.getElementById('dl-spec-'+idx);
-  if(specDl) {
-    const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
-    specDl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
-    // 規格が1種類なら自動入力
-    if(specs.length===1) {
-      const specEl = document.querySelector(`[data-r="${idx}"][data-f="spec"]`);
-      if(specEl && !specEl.value) specEl.value = specs[0];
-    }
-  }
+
+      // 規格datalist更新（全規格を候補に出す・自動入力はしない）
+      const specDlEl = document.getElementById('dl-spec-'+idx);
+      if(specDlEl) {
+        const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
+        specDlEl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
+        // ★ 自動入力は行わない（ユーザーがドロップダウンから選択）
+      }
+
+      // カラーdatalist更新
+      const codes = [...new Set(items.map(c=>c.color_code).filter(Boolean))];
+      colorDl.innerHTML = codes.map(code=>{
+        const found = items.find(x=>x.color_code===code);
+        return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
+      }).join('');
     });
   }
 
@@ -994,16 +992,12 @@ async function onMatNameChange(idx) {
   const cpRes = await api('material_color_prices.get', {material_id:mat.material_id});
   const cp    = cpRes?.items||[];
 
-  // 規格datalistを更新（dl-spec-${idx}）
+  // 規格datalistを更新（dl-spec-${idx}）- 自動入力はしない
   const specDl2 = document.getElementById('dl-spec-'+idx);
   if(specDl2) {
     const specs = [...new Set(cp.map(c=>c.spec||'').filter(Boolean))];
     specDl2.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
-    // 規格が1種類だけなら自動入力
-    if(specs.length===1) {
-      const specEl = document.querySelector(`[data-r="${idx}"][data-f="spec"]`);
-      if(specEl && !specEl.value) specEl.value = specs[0];
-    }
+    // ★ 自動入力はしない（ユーザーがドロップダウンから選択）
   }
 
   // カラーdatalistを更新（dl-mat-colors-${idx}）
@@ -1018,7 +1012,26 @@ async function onMatNameChange(idx) {
   }
 }
 
-// カラーコード入力時：単価を自動更新（訂正時も上書き）
+// 規格変更時：その規格のカラー候補に絞り込む
+async function onMatSpecChange(idx) {
+  const spec  = getMF(idx,'spec');
+  const matId = _materialRows[idx]?._material_id;
+  if(!matId) return;
+
+  const cpRes = await api('material_color_prices.get', {material_id: matId});
+  const items = cpRes?.items||[];
+
+  // 選択した規格でフィルター（規格が空なら全件）
+  const filtered = spec ? items.filter(c=>(c.spec||'')===spec) : items;
+  const colorDl  = document.getElementById('dl-mat-colors-'+idx);
+  if(colorDl) {
+    const codes = [...new Set(filtered.map(c=>c.color_code).filter(Boolean))];
+    colorDl.innerHTML = codes.map(code=>{
+      const found = filtered.find(x=>x.color_code===code);
+      return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
+    }).join('');
+  }
+}
 async function onMatColorInput(idx, colNum) {
   const code  = getMF(idx,'col'+colNum+'_matcode');
   const spec  = getMF(idx,'spec');
