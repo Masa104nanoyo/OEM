@@ -717,7 +717,7 @@ async function renderMaterialsTab() {
       <button class="btn btn-secondary btn-sm" onclick="addMatRow()">＋ 行を追加</button>
       <button class="btn btn-secondary btn-sm" onclick="openMatSearchPopup()">🔍 資材マスタから追加</button>
       ${numCols<7?`<button class="btn btn-secondary btn-sm" onclick="addMatColorColNew()">＋ カラー列を追加</button>`:''}
-      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+      <button class="btn btn-secondary btn-sm" onclick="pdfMaterialOrder()">📦 資材発注書</button>      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
         <span style="font-size:12px;color:var(--c-text2)">着単価計算：</span>
         <select id="cost-calc-method" onchange="saveCostCalcMethod(this.value)" style="font-size:12px">
           <option value="average" ${calcMethod==='average'?'selected':''}>平均法</option>
@@ -731,10 +731,12 @@ async function renderMaterialsTab() {
     <table class="material-table" id="mat-table">
       <thead>
         <tr>
+          <th rowspan="2" style="width:24px"><input type="checkbox" id="mat-chk-all" onchange="toggleAllMatChk(this)" style="width:13px;height:13px" title="全選択"></th>
           <th rowspan="2" style="width:28px">No.</th>
           <th rowspan="2" style="min-width:90px">品番</th>
           <th rowspan="2" style="min-width:140px">品名</th>
           <th rowspan="2" style="min-width:80px">規格</th>
+          <th rowspan="2" style="width:80px">対応サイズ</th>
           <th rowspan="2" style="width:75px">分類</th>
           <th rowspan="2" style="min-width:110px">使用箇所</th>
           <th rowspan="2" style="width:55px">用尺</th>
@@ -782,8 +784,10 @@ function addMatColorColNew() {
   renderMaterialsTab();
 }
 
-const _matFields = ['product_no','product_name','spec','category','usage_location',
-  'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo'];
+const _matFields = ['product_no','product_name','spec','applicable_sizes','category','usage_location',
+  'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo',
+  'col1_matcode','col1_price','col2_matcode','col2_price','col3_matcode','col3_price',
+  'col4_matcode','col4_price','col5_matcode','col5_price','col6_matcode','col6_price','col7_matcode','col7_price'];
 
 function appendMatRow(tbody, r, idx, supOpts) {
   const sN = s => s.partner_name||s.supplier_name||'';
@@ -816,12 +820,19 @@ function appendMatRow(tbody, r, idx, supOpts) {
   const tr=document.createElement('tr');
   tr.dataset.idx=idx;
   tr.innerHTML=`
+    <td style="text-align:center"><input type="checkbox" class="mat-order-chk" data-idx="${idx}" style="width:13px;height:13px"></td>
     <td class="slot-cell">${idx+1}</td>
     <td><input type="text" data-r="${idx}" data-f="product_no"   value="${esc(r.product_no||'')}"   placeholder="品番" style="min-width:80px"></td>
     <td><input type="text" data-r="${idx}" data-f="product_name" value="${esc(r.product_name||'')}" placeholder="品名" list="mat-names" style="min-width:130px" onchange="onMatNameChange(${idx})"></td>
     <td>
       <input type="text" data-r="${idx}" data-f="spec" value="${esc(r.spec||'')}" placeholder="規格" style="min-width:70px" list="dl-spec-${idx}">
       <datalist id="dl-spec-${idx}"></datalist>
+    </td>
+    <td>
+      <input type="text" data-r="${idx}" data-f="applicable_sizes" value="${esc(r.applicable_sizes||'')}"
+        placeholder="S/M など" style="width:74px;font-size:11px"
+        title="対応サイズを / 区切りで入力。空欄=全サイズ" list="dl-sizes-${idx}">
+      <datalist id="dl-sizes-${idx}">${(_currentProduct.size_range||'').split('/').map(s=>`<option value="${esc(s.trim())}">`).join('')}</datalist>
     </td>
     <td><select data-r="${idx}" data-f="category" style="font-size:11px;width:100%">
       ${CATEGORIES.map(c=>`<option value="${c}" ${r.category===c?'selected':''}>${c}</option>`).join('')}
@@ -1015,6 +1026,10 @@ async function onMatColorInput(idx, colNum) {
       toast(`Col.${colNum}の単価を自動入力しました（${res.item.unit_price}円）`,'success');
     }
   }
+}
+
+function toggleAllMatChk(chk) {
+  document.querySelectorAll('.mat-order-chk').forEach(c=>{ c.checked=chk.checked; });
 }
 
 // 資材シートから直接マスタ編集
@@ -1721,6 +1736,257 @@ async function pdfProcessSheet() {
   <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
   <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書</span><span>1 / 1</span></div>`;
   openPrintWindow(html, '工程表_'+p.brand_product_no);
+}
+
+// ===== 資材発注書 =====
+async function pdfMaterialOrder() {
+  document.getElementById('pdf-menu').style.display='none';
+
+  // 資材シートが開いていない場合はデータ取得
+  let rows = _materialRows.filter(r=>r.product_name||r.product_no);
+  if(!rows.length) {
+    const res = await api('product_materials.get',{style_code:_currentProduct.style_code});
+    rows = (res?.items||[]).filter(r=>r.product_name||r.product_no);
+  }
+
+  // チェックされた行を取得
+  const checked = Array.from(document.querySelectorAll('.mat-order-chk:checked')).map(c=>Number(c.dataset.idx));
+  const targetRows = checked.length > 0 ? checked.map(i=>rows[i]).filter(Boolean) : rows;
+
+  if(!targetRows.length){ toast('資材シートにデータがありません','error'); return; }
+
+  // 発注数量データ取得
+  const qtyRes = await api('order_qty.get',{style_code:_currentProduct.style_code});
+  const qtyData = qtyRes?.items||[];
+  const p = _currentProduct;
+  const prodColors = _productColors.filter(c=>c.code);
+  const allSizes = (p.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+
+  // カラー×サイズ数量マップ: {color_code: {size: qty}}
+  const qtyMap = {};
+  qtyData.forEach(q=>{
+    if(!qtyMap[q.color_code]) qtyMap[q.color_code]={};
+    qtyMap[q.color_code][q.size_name] = Number(q.quantity)||0;
+  });
+
+  // 計算関数
+  const calcOrderQty = (matRow) => {
+    const usageQty  = parseFloat(matRow.usage_quantity)||0;
+    const lossRate  = (parseFloat(matRow.loss_rate)||0)/100;
+    const appSizes  = (matRow.applicable_sizes||'').split('/').map(s=>s.trim()).filter(Boolean);
+    const targetSizes = appSizes.length ? appSizes : allSizes;
+
+    // 資材カラーコードでグループ化
+    const matColorGroups = {}; // {matcode: [{colIdx, prodColor}]}
+    for(let n=1;n<=7;n++){
+      const mc = matRow['col'+n+'_matcode']||getMF(_materialRows.indexOf(matRow),'col'+n+'_matcode')||'';
+      if(!mc) continue;
+      const pc = prodColors[n-1];
+      if(!pc) continue;
+      if(!matColorGroups[mc]) matColorGroups[mc]=[];
+      matColorGroups[mc].push({colIdx:n, prodColor:pc});
+    }
+
+    // 各資材カラーグループの発注数量を計算
+    const results = [];
+    Object.entries(matColorGroups).forEach(([matCode, cols])=>{
+      // 同じ資材カラーに紐づく製品カラーの数量を合算
+      let totalQty = 0;
+      const prodColorNames = [];
+      cols.forEach(({prodColor})=>{
+        prodColorNames.push(prodColor.name);
+        const sizeQty = qtyMap[prodColor.code]||{};
+        targetSizes.forEach(sz=>{
+          totalQty += Number(sizeQty[sz]||0);
+        });
+      });
+      const orderQty = Math.ceil(totalQty * usageQty * (1+lossRate));
+      const price = parseFloat(matRow['col'+cols[0].colIdx+'_price'])||0;
+      results.push({
+        matCode,
+        prodColorNames: prodColorNames.join('・'),
+        totalQty,
+        orderQty,
+        price,
+        amount: orderQty * price,
+      });
+    });
+
+    // カラー設定がない場合は全カラー合計
+    if(!results.length) {
+      let totalQty = 0;
+      allSizes.forEach(sz=>{ prodColors.forEach(pc=>{ totalQty += Number((qtyMap[pc.code]||{})[sz]||0); }); });
+      const orderQty = Math.ceil(totalQty * usageQty * (1+lossRate));
+      results.push({matCode:'', prodColorNames:'全カラー', totalQty, orderQty, price:0, amount:0});
+    }
+    return results;
+  };
+
+  // 仕入先でグループ化
+  const supplierGroups = {};
+  targetRows.forEach(r=>{
+    const sup = r.supplier_name||getMF(_materialRows.indexOf(r),'supplier_name')||'未設定';
+    if(!supplierGroups[sup]) supplierGroups[sup]=[];
+    supplierGroups[sup].push(r);
+  });
+
+  // 単価・数量入力ポップアップ
+  const ov = document.createElement('div');
+  ov.id='mat-order-ov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:center;justify-content:center';
+
+  let popHtml = `<div style="background:var(--c-surface);border-radius:12px;padding:24px;width:700px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">📦 資材発注書 — 数量・単価確認</h3>
+    <p style="font-size:11px;color:var(--c-text2);margin-bottom:14px">自動計算された数量・単価を確認・訂正してから発注書を発行してください</p>`;
+
+  Object.entries(supplierGroups).forEach(([sup, rows], gi)=>{
+    popHtml += `<div style="margin-bottom:16px;border:1px solid var(--c-border);border-radius:8px;padding:12px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:8px;color:var(--c-primary)">【発注先: ${esc(sup)}】</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:var(--c-bg)">
+          <th style="padding:4px 6px;text-align:left;border-bottom:0.5px solid var(--c-border)">品番</th>
+          <th style="padding:4px 6px;text-align:left;border-bottom:0.5px solid var(--c-border)">品名</th>
+          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">規格</th>
+          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">対象カラー</th>
+          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">対応サイズ</th>
+          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">数量</th>
+          <th style="padding:4px 6px;border-bottom:0.5px solid var(--c-border)">単位</th>
+          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">単価</th>
+          <th style="padding:4px 6px;text-align:right;border-bottom:0.5px solid var(--c-border)">金額</th>
+        </tr></thead>
+        <tbody id="pop-tbody-${gi}">`;
+
+    rows.forEach((r,ri)=>{
+      const results = calcOrderQty(r);
+      results.forEach((res,resi)=>{
+        const rowId = `r${gi}_${ri}_${resi}`;
+        popHtml += `<tr>
+          <td style="padding:3px 5px;font-family:monospace;font-size:10px">${esc(r.product_no||'')}</td>
+          <td style="padding:3px 5px">${esc(r.product_name||'')}</td>
+          <td style="padding:3px 5px">${esc(r.spec||'')}</td>
+          <td style="padding:3px 5px">${esc(res.matCode?res.matCode+' ':'')}${esc(res.prodColorNames)}</td>
+          <td style="padding:3px 5px">${esc(r.applicable_sizes||'全')}
+          </td>
+          <td style="padding:3px 2px"><input type="number" id="pop-qty-${rowId}" value="${res.orderQty}" min="0" style="width:65px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')"></td>
+          <td style="padding:3px 5px">${esc(r.unit||'')}</td>
+          <td style="padding:3px 2px"><input type="number" id="pop-price-${rowId}" value="${res.price||0}" min="0" style="width:70px;text-align:right;font-size:11px" oninput="updatePopAmount('${rowId}')"></td>
+          <td style="padding:3px 5px;text-align:right;font-weight:600" id="pop-amt-${rowId}">${(res.orderQty*(res.price||0)).toLocaleString()}円</td>
+        </tr>`;
+      });
+    });
+
+    popHtml += `</tbody></table></div>`;
+  });
+
+  popHtml += `<div style="display:flex;gap:8px;justify-content:space-between;margin-top:12px">
+    <p style="font-size:11px;color:var(--c-text2)">※ 数量・単価は手動で訂正できます</p>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="document.getElementById('mat-order-ov').remove()">キャンセル</button>
+      <button class="btn btn-primary" onclick="generateMaterialOrderPDF()">📄 発注書を発行</button>
+    </div>
+  </div></div>`;
+
+  ov.innerHTML = popHtml;
+  document.body.appendChild(ov);
+  ov.addEventListener('click',e=>{if(e.target===ov) ov.remove();});
+
+  // グループ情報を保持
+  window._matOrderGroups = supplierGroups;
+}
+
+function updatePopAmount(rowId) {
+  const qty   = parseFloat(document.getElementById('pop-qty-'+rowId)?.value)||0;
+  const price = parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
+  const el    = document.getElementById('pop-amt-'+rowId);
+  if(el) el.textContent = Math.round(qty*price).toLocaleString()+'円';
+}
+
+async function generateMaterialOrderPDF() {
+  const p = _currentProduct;
+  const groups = window._matOrderGroups||{};
+  let pages='', pageIdx=0;
+  const totalPages = Object.keys(groups).length;
+
+  for(const [sup, rows] of Object.entries(groups)) {
+    const noRes = await api('order_no.generate',{type:'M'});
+    const orderNo = noRes?.order_no||'RL-M-??????';
+
+    // 明細行を収集
+    let grandAmt=0;
+    const detailRows = [];
+    rows.forEach((r,ri)=>{
+      // ポップアップの値を読む
+      const results = [];
+      for(let resi=0;;resi++){
+        const rowId = `r${Object.keys(groups).indexOf(sup)}_${ri}_${resi}`;
+        const qtyEl = document.getElementById('pop-qty-'+rowId);
+        if(!qtyEl) break;
+        const qty   = parseFloat(qtyEl.value)||0;
+        const price = parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
+        const amt   = Math.round(qty*price);
+        grandAmt += amt;
+        const appSizes = r.applicable_sizes||'全サイズ';
+        // カラー情報
+        let colorDesc = '';
+        for(let n=1;n<=7;n++){
+          const mc = r['col'+n+'_matcode']||getMF(_materialRows.indexOf(r),'col'+n+'_matcode')||'';
+          if(mc) { colorDesc = mc; break; }
+        }
+        detailRows.push(`<tr>
+          <td style="font-family:monospace;font-size:8pt">${esc(r.product_no||'')}</td>
+          <td>${esc(r.product_name||'')}</td>
+          <td>${esc(r.spec||'')}</td>
+          <td>${esc(colorDesc)}</td>
+          <td>${esc(appSizes)}</td>
+          <td style="text-align:right">${qty.toLocaleString()}</td>
+          <td>${esc(r.unit||'')}</td>
+          <td style="text-align:right">${price?price.toLocaleString()+'円':''}</td>
+          <td style="text-align:right;font-weight:700">${amt?amt.toLocaleString()+'円':''}</td>
+        </tr>`);
+      }
+    });
+
+    // 履歴保存
+    await api('order_history.save',{
+      order_no:orderNo, order_type:'資材発注', style_code:p.style_code,
+      supplier_name:sup, process_names:'', total_qty:0, total_amount:grandAmt, memo:''
+    });
+
+    pages += `${pageIdx>0?'<div class="page-break"></div>':''}
+    <div class="header">
+      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd.</div></div>
+      <div><div class="doc-title">資 材 発 注 書</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd;font-size:8.5pt">
+      <div class="info-row"><span class="lbl">発注先：</span><span class="val" style="font-weight:700;font-size:11pt">${esc(sup)}</span></div>
+      <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
+      <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
+      <div class="info-row"><span class="lbl">納期：</span><span class="val" style="color:#CC2A2A;font-weight:700">${esc(p.delivery_date||'')}</span></div>
+    </div>
+    <div class="sec-title">発注明細</div>
+    <table>
+      <thead><tr>
+        <th style="width:56pt">品番</th><th>品名</th><th style="width:50pt">規格</th>
+        <th style="width:46pt">資材カラー</th><th style="width:46pt">対応サイズ</th>
+        <th style="width:36pt;text-align:right">数量</th><th style="width:20pt">単位</th>
+        <th style="width:46pt;text-align:right">単価</th><th style="width:54pt;text-align:right">金額</th>
+      </tr></thead>
+      <tbody>${detailRows.join('')}</tbody>
+      <tfoot><tr class="total-row">
+        <td colspan="8" style="text-align:right;padding-right:8pt">合計金額</td>
+        <td style="text-align:right;font-size:11pt;font-weight:700">${grandAmt.toLocaleString()}円</td>
+      </tr></tfoot>
+    </table>
+    <div style="margin-top:10pt"><div class="sec-title">備考・指示事項</div>
+    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;min-height:36pt;color:#888;font-size:8.5pt"></div></div>
+    <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+    <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書 / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
+    pageIdx++;
+  }
+
+  document.getElementById('mat-order-ov')?.remove();
+  openPrintWindow(pages,'資材発注書_'+p.brand_product_no);
+  toast('資材発注書を発行しました（履歴保存済）','success');
 }
 
 // ===== マスタ管理 =====
