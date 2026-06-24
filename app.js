@@ -299,8 +299,11 @@ async function openProduct(style_code) {
   document.getElementById('fs-tabs').innerHTML=
     '<button class="fs-tab active" id="fstab-product"    onclick="switchFsTab(\'product\')">📋 製品シート</button>'+
     '<button class="fs-tab"        id="fstab-materials"  onclick="switchFsTab(\'materials\')">🧵 資材シート</button>'+
-    '<button class="fs-tab"        id="fstab-orderqty"   onclick="switchFsTab(\'orderqty\')">📊 発注数量</button>'+
-    '<button class="fs-tab"        id="fstab-processes"  onclick="switchFsTab(\'processes\')">🔧 工程</button>';
+    '<button class="fs-tab"        id="fstab-orderqty"   onclick="switchFsTab(\'orderqty\')">📊 発注ロット</button>'+
+    '<button class="fs-tab"        id="fstab-processes"  onclick="switchFsTab(\'processes\')">🔧 工程</button>'+
+    '<button class="fs-tab"        id="fstab-progress"   onclick="switchFsTab(\'progress\')">📈 生産進捗</button>'+
+    '<button class="fs-tab"        id="fstab-cost"       onclick="switchFsTab(\'cost\')">💰 原価・見積</button>'+
+    '<button class="fs-tab"        id="fstab-history"    onclick="switchFsTab(\'history\')">📜 発注履歴</button>';
   document.getElementById('fs-actions').innerHTML=
     '<button class="btn btn-secondary btn-sm" onclick="showPdfMenu()">📄 PDF出力 ▼</button>'+
     '<div id="pdf-menu" style="display:none;position:absolute;right:20px;top:52px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--radius);box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:200;min-width:200px">'+
@@ -336,14 +339,19 @@ function switchFsTab(tab) {
   const b=document.getElementById('fstab-'+tab); if(b) b.classList.add('active');
   if(tab==='product')   { document.getElementById('fs-body').innerHTML=renderProductForm(_currentProduct); setupImagePaste(); }
   if(tab==='materials')  renderMaterialsTab();
-  if(tab==='orderqty')   renderOrderQtyTab();
+  if(tab==='orderqty')   renderOrderLotsTab();
   if(tab==='processes')  renderProcessesTab();
+  if(tab==='progress')   renderProgressTab();
+  if(tab==='cost')       renderCostTab();
+  if(tab==='history')    renderHistoryTab();
 }
 async function saveFsTab() {
   if(_currentFsTab==='product')   await saveProductData();
   if(_currentFsTab==='materials') await saveMaterialsData();
-  if(_currentFsTab==='orderqty')  await saveOrderQty();
+  if(_currentFsTab==='orderqty')  await saveOrderLots();
   if(_currentFsTab==='processes') await saveProcesses();
+  if(_currentFsTab==='progress')  await saveProgress();
+  if(_currentFsTab==='cost')      await saveCostEstimate();
 }
 
 // ===== 製品フォーム =====
@@ -1820,6 +1828,479 @@ async function pdfProcessSheet() {
   <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
   <div class="footer"><span>Raises Lab Co., Ltd. — 機密文書</span><span>1 / 1</span></div>`;
   openPrintWindow(html, '工程表_'+p.brand_product_no);
+}
+
+// ===== ① 製品発注ロット管理 =====
+let _orderLots = [];
+
+async function renderOrderLotsTab() {
+  const res = await api('order_lots.get', {style_code:_currentProduct.style_code});
+  _orderLots = res?.items||[];
+  if(!_orderLots.length) _orderLots = [{lot_no:1,lot_name:'初回',order_date:'',order_no:'',status:'draft',memo:'',quantities:[]}];
+
+  const prodColors = _productColors.filter(c=>c.code);
+  const sizes = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+
+  let html = `<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px">
+    <h3 style="flex:1">📊 製品発注ロット管理</h3>
+    <button class="btn btn-secondary btn-sm" onclick="addOrderLot()">＋ 追加ロットを追加</button>
+  </div>`;
+
+  _orderLots.forEach((lot,li)=>{
+    const qtyMap = {};
+    (lot.quantities||[]).forEach(q=>{ if(!qtyMap[q.color_code]) qtyMap[q.color_code]={}; qtyMap[q.color_code][q.size_name]=Number(q.quantity)||0; });
+
+    html += `<div class="section-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span class="badge badge-${lot.status==='completed'?'completed':lot.status==='ordered'?'in_production':'draft'}" style="font-size:12px">
+          ${lot.lot_no===1?'初回発注':('追加発注'+(lot.lot_no-1))}
+        </span>
+        <select id="lot-status-${li}" style="font-size:12px" onchange="_orderLots[${li}].status=this.value">
+          <option value="draft" ${lot.status==='draft'?'selected':''}>下書き</option>
+          <option value="ordered" ${lot.status==='ordered'?'selected':''}>発注済</option>
+          <option value="completed" ${lot.status==='completed'?'selected':''}>完了</option>
+        </select>
+        <input type="date" id="lot-date-${li}" value="${esc(lot.order_date||'')}" style="font-size:12px" title="発注日">
+        <input type="text" id="lot-no-${li}" value="${esc(lot.order_no||'')}" placeholder="発注書No." style="font-size:12px;width:130px">
+        <input type="text" id="lot-memo-${li}" value="${esc(lot.memo||'')}" placeholder="備考" style="font-size:12px;flex:1">
+        ${li>0?`<button class="del-btn" onclick="delOrderLot(${li})">✕</button>`:''}
+      </div>
+      <div style="overflow-x:auto"><table class="material-table">
+        <thead><tr><th>カラー</th>${sizes.map(s=>`<th style="text-align:right">${esc(s)}</th>`).join('')}<th style="text-align:right;color:var(--c-primary)">小計</th></tr></thead>
+        <tbody>
+          ${prodColors.map((c,ci)=>{
+            let rowTotal=0;
+            const cells=sizes.map(s=>{const v=(qtyMap[c.code]||{})[s]||0;rowTotal+=v;return`<td><input type="number" min="0" data-lot="${li}" data-col="${c.code}" data-sz="${s}" value="${v||''}" placeholder="0" oninput="updateLotTotal(${li})" style="width:55px;text-align:right;border:none;background:transparent;font-size:13px"></td>`;}).join('');
+            return`<tr><td style="font-weight:600">${esc(c.code)} ${esc(c.name)}</td>${cells}<td id="lot-row-${li}-${ci}" style="text-align:right;font-weight:700;color:var(--c-primary);padding-right:8px">${rowTotal||'-'}</td></tr>`;
+          }).join('')}
+          <tr style="background:#EEF2FD"><td style="font-weight:700;color:#2B5CE6">合計</td>
+            ${sizes.map(s=>`<td id="lot-col-${li}-${s}" style="text-align:right;font-weight:700;color:#2B5CE6">-</td>`).join('')}
+            <td id="lot-grand-${li}" style="text-align:right;font-size:15px;font-weight:700;color:#2B5CE6">-</td>
+          </tr>
+        </tbody>
+      </table></div>
+    </div>`;
+  });
+
+  // 全ロット合計
+  if(_orderLots.length>1) {
+    html+=`<div class="section-card" style="background:#EEF2FD;border:1px solid #2B5CE6">
+      <h4 style="color:#2B5CE6;margin-bottom:8px">📊 全ロット累計</h4>
+      <div id="lot-total-summary" style="font-size:13px"></div>
+    </div>`;
+  }
+
+  document.getElementById('fs-body').innerHTML=html;
+  _orderLots.forEach((_,li)=>updateLotTotal(li));
+}
+
+function updateLotTotal(li) {
+  const prodColors=_productColors.filter(c=>c.code);
+  const sizes=(_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+  const colTotals={}; sizes.forEach(s=>colTotals[s]=0);
+  let grand=0;
+  prodColors.forEach((c,ci)=>{
+    let rowTotal=0;
+    sizes.forEach(s=>{const el=document.querySelector(`[data-lot="${li}"][data-col="${c.code}"][data-sz="${s}"]`);const v=parseInt(el?.value)||0;rowTotal+=v;colTotals[s]+=v;grand+=v;});
+    const rt=document.getElementById(`lot-row-${li}-${ci}`);if(rt)rt.textContent=rowTotal||'-';
+  });
+  sizes.forEach(s=>{const ct=document.getElementById(`lot-col-${li}-${s}`);if(ct)ct.textContent=colTotals[s]||'-';});
+  const gt=document.getElementById(`lot-grand-${li}`);if(gt)gt.textContent=grand?grand.toLocaleString()+'着':'-';
+}
+
+function addOrderLot() {
+  _orderLots.push({lot_no:_orderLots.length+1,lot_name:'追加',order_date:'',order_no:'',status:'draft',memo:'',quantities:[]});
+  renderOrderLotsTab();
+}
+function delOrderLot(li) { _orderLots.splice(li,1); renderOrderLotsTab(); }
+
+async function saveOrderLots() {
+  const prodColors=_productColors.filter(c=>c.code);
+  const sizes=(_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
+  const lots = _orderLots.map((lot,li)=>{
+    const qtys=[];
+    prodColors.forEach(c=>{sizes.forEach(s=>{
+      const el=document.querySelector(`[data-lot="${li}"][data-col="${c.code}"][data-sz="${s}"]`);
+      const v=parseInt(el?.value)||0;
+      if(v>0) qtys.push({color_code:c.code,color_name:c.name,size_name:s,quantity:v});
+    });});
+    return {
+      lot_no:li+1, lot_name:lot.lot_name||'',
+      order_date:document.getElementById(`lot-date-${li}`)?.value||'',
+      order_no:  document.getElementById(`lot-no-${li}`)?.value||'',
+      status:    document.getElementById(`lot-status-${li}`)?.value||'draft',
+      memo:      document.getElementById(`lot-memo-${li}`)?.value||'',
+      quantities:qtys
+    };
+  });
+  const res=await api('order_lots.save',{style_code:_currentProduct.style_code,lots});
+  if(!res||!res.ok){toast('保存失敗','error');return;}
+  toast('発注ロットを保存しました','success');
+}
+
+// ===== ② 生産進捗管理 =====
+let _progressRows=[];
+const PROGRESS_STATUS={pending:'未着手',in_progress:'進行中',completed:'完了',cancelled:'中止'};
+
+async function renderProgressTab() {
+  const res=await api('progress.get',{style_code:_currentProduct.style_code});
+  _progressRows=res?.items||[];
+
+  // 工程データから初期化（未登録なら工程タブのデータを参照）
+  if(!_progressRows.length) {
+    const pRes=await api('processes.get',{style_code:_currentProduct.style_code});
+    const procs=pRes?.items||[];
+    _progressRows=procs.map((p,i)=>({
+      process_seq:i+1,process_name:p.process_name,factory_name:p.factory_name,
+      input_qty:'',defect_qty:'',defect_reason:'',good_qty:'',
+      planned_date:p.planned_date,actual_date:'',status:'pending',memo:''
+    }));
+  }
+
+  // 累計B品率
+  const totalIn=_progressRows.reduce((a,r)=>a+(Number(r.input_qty)||0),0);
+  const totalDef=_progressRows.reduce((a,r)=>a+(Number(r.defect_qty)||0),0);
+  const defRate=totalIn>0?(totalDef/totalIn*100).toFixed(1):0;
+
+  let html=`<div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <h3>📈 生産進捗管理</h3>
+    <div style="background:#EEF2FD;border-radius:6px;padding:6px 14px;font-size:13px">
+      累計B品率：<strong style="color:${defRate>3?'#CC2A2A':'#0F6E56'};font-size:16px">${defRate}%</strong>
+      （${totalDef}着 / ${totalIn}着）
+    </div>
+  </div>
+  <div style="overflow-x:auto"><table class="material-table">
+    <thead><tr>
+      <th>順</th><th>工程名</th><th>加工場</th>
+      <th style="text-align:right">投入数</th><th style="text-align:right">B品数</th>
+      <th style="min-width:120px">B品理由</th><th style="text-align:right;color:#0F6E56">良品数</th>
+      <th style="width:90px">B品率</th>
+      <th>予定納期</th><th>実績完了日</th>
+      <th style="width:70px">状態</th><th>備考</th>
+    </tr></thead>
+    <tbody>`;
+
+  _progressRows.forEach((r,i)=>{
+    const goodQty=Math.max(0,(Number(r.input_qty)||0)-(Number(r.defect_qty)||0));
+    const rowRate=r.input_qty>0?((Number(r.defect_qty)||0)/(Number(r.input_qty)||1)*100).toFixed(1):'';
+    html+=`<tr>
+      <td style="text-align:center">${r.process_seq||i+1}</td>
+      <td><strong>${esc(r.process_name||'')}</strong></td>
+      <td>${esc(r.factory_name||'')}</td>
+      <td><input type="number" id="pg-in-${i}" value="${r.input_qty||''}" placeholder="0" oninput="calcGoodQty(${i})" style="width:60px;text-align:right;border:none;background:transparent"></td>
+      <td><input type="number" id="pg-def-${i}" value="${r.defect_qty||''}" placeholder="0" oninput="calcGoodQty(${i})" style="width:55px;text-align:right;border:none;background:transparent;color:#CC2A2A"></td>
+      <td><input type="text" id="pg-reason-${i}" value="${esc(r.defect_reason||'')}" placeholder="理由" style="min-width:100px"></td>
+      <td id="pg-good-${i}" style="text-align:right;font-weight:700;color:#0F6E56">${goodQty||'-'}</td>
+      <td id="pg-rate-${i}" style="text-align:right;color:${rowRate>3?'#CC2A2A':'#888'}">${rowRate?rowRate+'%':''}</td>
+      <td><input type="date" id="pg-plan-${i}" value="${esc(r.planned_date||'')}" style="font-size:11px"></td>
+      <td><input type="date" id="pg-act-${i}"  value="${esc(r.actual_date||'')}"  style="font-size:11px"></td>
+      <td><select id="pg-stat-${i}" style="font-size:11px">
+        ${Object.entries(PROGRESS_STATUS).map(([v,l])=>`<option value="${v}" ${r.status===v?'selected':''}>${l}</option>`).join('')}
+      </select></td>
+      <td><input type="text" id="pg-memo-${i}" value="${esc(r.memo||'')}" placeholder="備考"></td>
+    </tr>`;
+  });
+
+  html+=`</tbody></table></div>`;
+  document.getElementById('fs-body').innerHTML=html;
+}
+
+function calcGoodQty(i) {
+  const inQ=parseInt(document.getElementById('pg-in-'+i)?.value)||0;
+  const def=parseInt(document.getElementById('pg-def-'+i)?.value)||0;
+  const good=Math.max(0,inQ-def);
+  const el=document.getElementById('pg-good-'+i);
+  if(el) el.textContent=good||'-';
+  const rate=inQ>0?(def/inQ*100).toFixed(1):'';
+  const re=document.getElementById('pg-rate-'+i);
+  if(re){re.textContent=rate?rate+'%':'';re.style.color=parseFloat(rate)>3?'#CC2A2A':'#888';}
+}
+
+async function saveProgress() {
+  const rows=_progressRows.map((_,i)=>{
+    const inQ=parseInt(document.getElementById('pg-in-'+i)?.value)||0;
+    const def=parseInt(document.getElementById('pg-def-'+i)?.value)||0;
+    return {
+      process_seq:_progressRows[i].process_seq||i+1,
+      process_name:_progressRows[i].process_name||'',
+      factory_name:_progressRows[i].factory_name||'',
+      input_qty:inQ, defect_qty:def, defect_reason:document.getElementById('pg-reason-'+i)?.value||'',
+      good_qty:Math.max(0,inQ-def),
+      planned_date:document.getElementById('pg-plan-'+i)?.value||'',
+      actual_date: document.getElementById('pg-act-'+i)?.value||'',
+      status:      document.getElementById('pg-stat-'+i)?.value||'pending',
+      memo:        document.getElementById('pg-memo-'+i)?.value||'',
+    };
+  });
+  const res=await api('progress.save',{style_code:_currentProduct.style_code,rows});
+  if(!res||!res.ok){toast('保存失敗','error');return;}
+  toast('進捗を保存しました','success');
+}
+
+// ===== ③ 原価・見積タブ =====
+async function renderCostTab() {
+  const p=_currentProduct;
+  // 資材シートデータ取得
+  const matRes=await api('product_materials.get',{style_code:p.style_code});
+  const mats=(matRes?.items||[]).filter(r=>r.product_name||r.product_no);
+  // 既存見積設定取得
+  const ceRes=await api('cost_estimate.get',{style_code:p.style_code});
+  const ce=ceRes?.item||{calc_method:'average',sewing_cost:0,other_cost:0,markup_rate:0,memo:''};
+  // 発注ロット取得（数量）
+  const lotRes=await api('order_lots.get',{style_code:p.style_code});
+  const lots=lotRes?.items||[];
+  const prodColors=_productColors.filter(c=>c.code);
+
+  // 着単価計算（平均法 or カラー毎）
+  const calcMaterialCost=(method)=>{
+    const costs={};
+    prodColors.forEach(c=>costs[c.code]=0);
+    mats.forEach(mat=>{
+      const qty=parseFloat(mat.usage_quantity)||0;
+      const loss=(parseFloat(mat.loss_rate)||0)/100;
+      for(let n=1;n<=7;n++){
+        const mc=mat['col'+n+'_matcode']||'';
+        const pr=parseFloat(mat['col'+n+'_price'])||0;
+        const pc=prodColors[n-1];
+        if(!mc||!pr||!pc) continue;
+        const unitCost=qty*pr*(1+loss);
+        costs[pc.code]=(costs[pc.code]||0)+unitCost;
+      }
+    });
+    if(method==='average') {
+      const vals=Object.values(costs).filter(v=>v>0);
+      const avg=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;
+      return {average:Math.round(avg), byColor:costs};
+    }
+    return {byColor:costs};
+  };
+
+  const sewingCost=parseFloat(ce.sewing_cost)||0;
+  const otherCost=parseFloat(ce.other_cost)||0;
+  const markupRate=parseFloat(ce.markup_rate)||0;
+  const matCosts=calcMaterialCost(ce.calc_method||'average');
+  const avgMatCost=matCosts.average||0;
+
+  const totalCost=Math.round(avgMatCost+sewingCost+otherCost);
+  const sellPrice=markupRate>0?Math.round(totalCost*(1+markupRate/100)):0;
+
+  let html=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+  <div>
+    <div class="section-card">
+      <h3>💰 見積原価設定</h3>
+      <div class="form-row form-row-2" style="margin-bottom:10px">
+        <div class="form-group"><label>着単価計算方法</label>
+          <select id="ce-method" onchange="renderCostTab()">
+            <option value="average" ${ce.calc_method==='average'?'selected':''}>平均法（全カラー平均）</option>
+            <option value="bycolor" ${ce.calc_method==='bycolor'?'selected':''}>カラー毎</option>
+          </select>
+        </div>
+        <div class="form-group"><label>工賃（円/着）</label>
+          <input type="number" id="ce-sewing" value="${sewingCost}" placeholder="0" oninput="updateCostSummary()">
+        </div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:10px">
+        <div class="form-group"><label>その他コスト（円/着）</label>
+          <input type="number" id="ce-other" value="${otherCost}" placeholder="0" oninput="updateCostSummary()">
+        </div>
+        <div class="form-group"><label>利益率（%）</label>
+          <input type="number" id="ce-markup" value="${markupRate}" placeholder="0" oninput="updateCostSummary()">
+        </div>
+      </div>
+      <div class="form-group"><label>備考</label>
+        <textarea id="ce-memo">${esc(ce.memo||'')}</textarea>
+      </div>
+    </div>
+    <div class="section-card" style="margin-top:12px">
+      <h3>📊 原価サマリー</h3>
+      <div id="cost-summary">
+        ${prodColors.map(c=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--c-border);font-size:13px">
+          <span>${esc(c.code)} ${esc(c.name)}</span>
+          <span style="font-weight:600">資材：${Math.round(matCosts.byColor[c.code]||0).toLocaleString()}円/着</span>
+        </div>`).join('')}
+        <div style="margin-top:10px;padding:10px;background:#EEF2FD;border-radius:6px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span>資材費（平均）</span><span style="font-weight:700">${avgMatCost.toLocaleString()}円</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span>工賃</span><span id="sum-sewing">${sewingCost.toLocaleString()}円</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span>その他</span><span id="sum-other">${otherCost.toLocaleString()}円</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:700;color:#2B5CE6;border-top:1px solid #2B5CE6;margin-top:6px;padding-top:6px">
+            <span>原価合計</span><span id="sum-total">${totalCost.toLocaleString()}円/着</span>
+          </div>
+          ${markupRate>0?`<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:#0F6E56;margin-top:4px">
+            <span>売価（利益率${markupRate}%）</span><span id="sum-sell">${sellPrice.toLocaleString()}円/着</span>
+          </div>`:''}
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="pdfCostEstimate()">📄 見積書PDF出力</button>
+    </div>
+  </div>
+  <div>
+    <div class="section-card">
+      <h3>📋 資材着単価明細</h3>
+      <table class="master-table" style="font-size:12px">
+        <thead><tr><th>品名</th><th>規格</th><th>用尺</th><th>ロス%</th>
+          ${prodColors.map(c=>`<th style="text-align:right">${esc(c.name)}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${mats.map(mat=>{
+            const qty=parseFloat(mat.usage_quantity)||0;
+            const loss=(parseFloat(mat.loss_rate)||0)/100;
+            const cells=prodColors.map((c,ci)=>{
+              const pr=parseFloat(mat['col'+(ci+1)+'_price'])||0;
+              const cost=Math.round(qty*pr*(1+loss));
+              return`<td style="text-align:right">${cost?cost.toLocaleString()+'円':'-'}</td>`;
+            }).join('');
+            return`<tr><td>${esc(mat.product_name||'')}</td><td>${esc(mat.spec||'')}</td><td>${qty}${esc(mat.unit||'')}</td><td>${esc(mat.loss_rate||'0')}%</td>${cells}</tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>`;
+  document.getElementById('fs-body').innerHTML=html;
+}
+
+function updateCostSummary() {
+  const sewing=parseFloat(document.getElementById('ce-sewing')?.value)||0;
+  const other=parseFloat(document.getElementById('ce-other')?.value)||0;
+  const markup=parseFloat(document.getElementById('ce-markup')?.value)||0;
+  const ss=document.getElementById('sum-sewing');if(ss)ss.textContent=sewing.toLocaleString()+'円';
+  const so=document.getElementById('sum-other');if(so)so.textContent=other.toLocaleString()+'円';
+  // matCostはDOMから再計算不要なので現在値を維持してsumだけ更新
+  const cur=parseInt((document.getElementById('sum-total')?.textContent||'0').replace(/[^0-9]/g,''))||0;
+  const matPart=Math.max(0,cur-sewing-other);// 近似
+  const tot=matPart+sewing+other;
+  const st=document.getElementById('sum-total');if(st)st.textContent=tot.toLocaleString()+'円/着';
+  if(markup>0){const sell=Math.round(tot*(1+markup/100));const ss2=document.getElementById('sum-sell');if(ss2)ss2.textContent=sell.toLocaleString()+'円/着';}
+}
+
+async function saveCostEstimate() {
+  const res=await api('cost_estimate.save',{
+    style_code:_currentProduct.style_code,
+    calc_method:document.getElementById('ce-method')?.value||'average',
+    sewing_cost:parseFloat(document.getElementById('ce-sewing')?.value)||0,
+    other_cost: parseFloat(document.getElementById('ce-other')?.value)||0,
+    markup_rate:parseFloat(document.getElementById('ce-markup')?.value)||0,
+    memo:document.getElementById('ce-memo')?.value||'',
+  });
+  if(!res||!res.ok){toast('保存失敗','error');return;}
+  toast('見積原価を保存しました','success');
+}
+
+async function pdfCostEstimate() {
+  const p=_currentProduct;
+  const matRes=await api('product_materials.get',{style_code:p.style_code});
+  const mats=(matRes?.items||[]).filter(r=>r.product_name||r.product_no);
+  const prodColors=_productColors.filter(c=>c.code);
+  const sewing=parseFloat(document.getElementById('ce-sewing')?.value)||0;
+  const other=parseFloat(document.getElementById('ce-other')?.value)||0;
+  const markup=parseFloat(document.getElementById('ce-markup')?.value)||0;
+
+  const matRows=mats.map(mat=>{
+    const qty=parseFloat(mat.usage_quantity)||0;
+    const loss=(parseFloat(mat.loss_rate)||0)/100;
+    const cells=prodColors.map((c,ci)=>{
+      const pr=parseFloat(mat['col'+(ci+1)+'_price'])||0;
+      return`<td style="text-align:right">${Math.round(qty*pr*(1+loss)).toLocaleString()}</td>`;
+    }).join('');
+    return`<tr><td>${esc(mat.product_name||'')}</td><td>${esc(mat.spec||'')}</td><td style="text-align:right">${qty}${esc(mat.unit||'')}</td><td style="text-align:right">${esc(mat.loss_rate||'0')}%</td>${cells}</tr>`;
+  }).join('');
+
+  // カラー別原価合計
+  const totals=prodColors.map((c,ci)=>{
+    let t=0;
+    mats.forEach(mat=>{const qty=parseFloat(mat.usage_quantity)||0;const loss=(parseFloat(mat.loss_rate)||0)/100;const pr=parseFloat(mat['col'+(ci+1)+'_price'])||0;t+=Math.round(qty*pr*(1+loss));});
+    return t;
+  });
+  const avgMat=totals.length?Math.round(totals.reduce((a,b)=>a+b,0)/totals.length):0;
+  const total=avgMat+sewing+other;
+  const sell=markup>0?Math.round(total*(1+markup/100)):0;
+
+  const html=`<div class="header">
+    <div><div class="logo">RL <span>OMS</span></div></div>
+    <div><div class="doc-title">見 積 原 価 表</div><div class="doc-no">${esc(p.brand_product_no||'')} / ${new Date().toLocaleDateString('ja-JP')}</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:10pt;font-size:8.5pt">
+    <div><span style="color:#888">品番：</span><strong>${esc(p.brand_product_no||'')}</strong></div>
+    <div><span style="color:#888">品名：</span>${esc(p.product_name||'')}</div>
+    <div><span style="color:#888">ブランド：</span>${esc(p.brand||'')}</div>
+    <div><span style="color:#888">年度/シーズン：</span>${esc(p.year||'')} ${esc(p.season||'')}</div>
+  </div>
+  <div class="sec-title">資材着単価明細</div>
+  <table style="margin-bottom:10pt">
+    <thead><tr><th>品名</th><th>規格</th><th style="text-align:right">用尺</th><th style="text-align:right">ロス%</th>
+      ${prodColors.map(c=>`<th style="text-align:right">${esc(c.name)}</th>`).join('')}
+    </tr></thead>
+    <tbody>${matRows}</tbody>
+    <tfoot><tr style="background:#EEF2FD;font-weight:700">
+      <td colspan="4" style="text-align:right;color:#2B5CE6">資材費小計（円/着）</td>
+      ${totals.map(t=>`<td style="text-align:right;color:#2B5CE6">${t.toLocaleString()}</td>`).join('')}
+    </tr></tfoot>
+  </table>
+  <div class="sec-title">原価サマリー</div>
+  <table style="max-width:300pt">
+    <tr><td>資材費（平均）</td><td style="text-align:right;font-weight:600">${avgMat.toLocaleString()}円/着</td></tr>
+    <tr><td>工賃</td><td style="text-align:right">${sewing.toLocaleString()}円/着</td></tr>
+    <tr><td>その他</td><td style="text-align:right">${other.toLocaleString()}円/着</td></tr>
+    <tr style="background:#EEF2FD;font-weight:700;font-size:11pt"><td style="color:#2B5CE6">原価合計</td><td style="text-align:right;color:#2B5CE6">${total.toLocaleString()}円/着</td></tr>
+    ${sell>0?`<tr style="background:#E1F5EE;font-weight:700"><td style="color:#0F6E56">売価（${markup}%利益）</td><td style="text-align:right;color:#0F6E56">${sell.toLocaleString()}円/着</td></tr>`:''}
+  </table>
+  <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+  <div class="footer"><span>Raises Lab Co., Ltd.</span><span>1 / 1</span></div>`;
+  openPrintWindow(html,'見積原価表_'+p.brand_product_no);
+}
+
+// ===== ④ 発注履歴タブ =====
+async function renderHistoryTab() {
+  const res=await api('order_history.list',{style_code:_currentProduct.style_code});
+  const items=res?.items||[];
+
+  const typeColor={
+    '資材発注(量産)':'b-blue','資材発注(サンプル)':'b-amber',
+    '加工発注':'b-green','資材発注':'b-blue'
+  };
+
+  let html=`<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px">
+    <h3>📜 発注履歴</h3>
+    <span style="font-size:12px;color:var(--c-text2)">${items.length}件</span>
+  </div>`;
+
+  if(!items.length){
+    html+='<div class="empty-state"><div class="icon">📄</div><p>発注履歴がありません</p></div>';
+  } else {
+    html+=`<table class="master-table">
+      <thead><tr>
+        <th>発注No.</th><th>種別</th><th>発注先</th><th>加工内容/工程</th>
+        <th style="text-align:right">合計数</th><th style="text-align:right">金額</th>
+        <th>発注日</th><th>担当</th>
+      </tr></thead>
+      <tbody>
+        ${items.slice().reverse().map(h=>{
+          const tc=typeColor[h.order_type]||'b-blue';
+          const isSample=h.order_type?.includes('サンプル');
+          return`<tr>
+            <td><code style="font-size:11px">${esc(h.order_no)}</code></td>
+            <td>
+              <span class="badge ${tc}" style="font-size:11px">${esc(h.order_type||'')}</span>
+              ${isSample?'':'<span class="badge badge-in_production" style="font-size:10px;margin-left:3px">量産</span>'}
+            </td>
+            <td>${esc(h.supplier_name||'')}</td>
+            <td style="font-size:11px;color:var(--c-text2)">${esc(h.process_names||'')}</td>
+            <td style="text-align:right">${h.total_qty?Number(h.total_qty).toLocaleString()+'着':'-'}</td>
+            <td style="text-align:right;font-weight:600">${h.total_amount?Number(h.total_amount).toLocaleString()+'円':'-'}</td>
+            <td style="font-size:11px">${esc((h.issued_at||'').substring(0,10))}</td>
+            <td style="font-size:11px">${esc(h.issued_by||'')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  }
+  document.getElementById('fs-body').innerHTML=html;
 }
 
 // ===== 資材発注書 =====
