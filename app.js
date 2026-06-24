@@ -682,28 +682,12 @@ function confirmSize() {
 }
 
 // ===== 資材シート =====
-// 全資材の単価キャッシュ {material_id: [colorPriceItems]}
 let _matColorCache = {};
 
 async function renderMaterialsTab() {
   const res = await api('product_materials.get', {style_code:_currentProduct.style_code});
   _materialRows = (res?.items||[]).filter(r=>r.product_no||r.product_name);
-  _matColorCache = {};
-
-  // 使用中の資材IDを一括取得して通信回数を削減
-  const matIds = [...new Set(_materialRows.map(r=>{
-    const mat = _masters.materials.find(m=>m.product_name===r.product_name||m.product_no===r.product_no);
-    if(mat) { r._material_id = mat.material_id; return mat.material_id; }
-    return null;
-  }).filter(Boolean))];
-
-  if(matIds.length > 0) {
-    const cpRes = await api('material_color_prices.get_multi', {material_ids: matIds});
-    const cpItems = cpRes?.items||[];
-    matIds.forEach(mid=>{
-      _matColorCache[mid] = cpItems.filter(c=>c.material_id===mid);
-    });
-  }
+  _matColorCache = {}; // キャッシュリセット
 
   // 製品カラー（Col.ヘッダー用）
   const prodColors = _productColors.filter(c=>c.code);
@@ -831,6 +815,7 @@ function appendMatRow(tbody, r, idx, supOpts) {
       <input type="text" data-r="${idx}" data-f="col${n+1}_matcode" value="${esc(matCode)}"
         placeholder="カラーコード" style="font-size:10px;width:100%;margin-bottom:1px;border-radius:3px"
         oninput="onMatColorInput(${idx},${n+1})"
+        onfocus="loadMatColorDl(${idx})"
         list="dl-mat-colors-${idx}">
       <input type="text" data-r="${idx}" data-f="col${n+1}_matcname" value="${esc(matCname)}"
         placeholder="カラー名" style="font-size:10px;width:100%;margin-bottom:1px;border-radius:3px;color:#555"
@@ -907,38 +892,22 @@ function appendMatRow(tbody, r, idx, supOpts) {
     document.body.appendChild(sizesDl);
   }
 
-  // キャッシュからdatalistを更新（通信回数を削減）
+  // カラーdatalistはユーザーがフォーカスした時だけ取得（起動時は取得しない）
   if(matMaster?.material_id) {
     if(_materialRows[idx]) _materialRows[idx]._material_id = matMaster.material_id;
-
-    const updateDatalists = (items) => {
-      const codes = [...new Set(items.map(c=>c.color_code).filter(Boolean))];
-      colorDl.innerHTML = codes.map(code=>{
-        const found = items.find(x=>x.color_code===code);
-        return `<option value="${esc(code)}">${esc(code)}${found?.color_name?' '+esc(found.color_name):''}${found?.unit_price?' ('+found.unit_price+'円)':''}`;
-      }).join('');
-      const specDlEl = document.getElementById('dl-spec-'+idx);
-      if(specDlEl) {
-        const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
-        specDlEl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
-      }
-    };
-
+    // キャッシュがあれば即時更新
     const cached = _matColorCache[matMaster.material_id];
-    if(cached && cached.length > 0) {
-      updateDatalists(cached);
-    } else {
-      api('material_color_prices.get', {material_id: matMaster.material_id}).then(res=>{
-        const fetched = res?.items||[];
-        _matColorCache[matMaster.material_id] = fetched;
-        updateDatalists(fetched);
-      });
+    if(cached) {
+      colorDl.innerHTML = [...new Set(cached.map(c=>c.color_code).filter(Boolean))].map(code=>{
+        const f=cached.find(x=>x.color_code===code);
+        return `<option value="${esc(code)}">${esc(code)}${f?.color_name?' '+esc(f.color_name):''}${f?.unit_price?' ('+f.unit_price+'円)':''}`;
+      }).join('');
     }
+    // キャッシュがなければフォーカス時に取得（ここでは何もしない）
   }
 
   calcRowTotal(idx);
 }
-
 
 function addMatRow() {
   const newRow = { material_slot: String(_materialRows.length+1).padStart(2,'0') };
@@ -1008,6 +977,33 @@ function calcMatTotal() {
   if(el) el.textContent=t?t.toLocaleString()+'円':'-';
 }
 
+// カラーdatalistをフォーカス時だけ取得（遅延読み込みで軽量化）
+async function loadMatColorDl(idx) {
+  const matId = _materialRows[idx]?._material_id;
+  if(!matId) return;
+  // キャッシュがあればスキップ
+  if(_matColorCache[matId]) return;
+
+  const res = await api('material_color_prices.get', {material_id: matId});
+  const items = res?.items||[];
+  _matColorCache[matId] = items;
+
+  // カラーdatalist更新
+  const colorDl = document.getElementById('dl-mat-colors-'+idx);
+  if(colorDl) {
+    colorDl.innerHTML = [...new Set(items.map(c=>c.color_code).filter(Boolean))].map(code=>{
+      const f = items.find(x=>x.color_code===code);
+      return `<option value="${esc(code)}">${esc(code)}${f?.color_name?' '+esc(f.color_name):''}${f?.unit_price?' ('+f.unit_price+'円)':''}`;
+    }).join('');
+  }
+  // 規格datalist更新
+  const specDl = document.getElementById('dl-spec-'+idx);
+  if(specDl) {
+    const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
+    specDl.innerHTML = specs.map(s=>`<option value="${esc(s)}">`).join('');
+  }
+}
+
 // 品名変更時：マスタ検索して規格リスト・カラーリストを更新
 async function onMatNameChange(idx) {
   const name = getMF(idx,'product_name');
@@ -1027,9 +1023,13 @@ async function onMatNameChange(idx) {
   // material_idを保存
   if(_materialRows[idx]) _materialRows[idx]._material_id = mat.material_id;
 
-  // カラー単価・規格をマスタから取得
-  const cpRes = await api('material_color_prices.get', {material_id:mat.material_id});
-  const cp    = cpRes?.items||[];
+  // キャッシュがあれば使う、なければ取得
+  let cp = _matColorCache[mat.material_id];
+  if(!cp) {
+    const cpRes = await api('material_color_prices.get', {material_id:mat.material_id});
+    cp = cpRes?.items||[];
+    _matColorCache[mat.material_id] = cp;
+  }
 
   // 規格datalistを更新（dl-spec-${idx}）- 自動入力はしない
   const specDl2 = document.getElementById('dl-spec-'+idx);
