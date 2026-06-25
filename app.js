@@ -950,18 +950,11 @@ function appendMatRow(tbody, r, idx, supOpts) {
     document.body.appendChild(sizesDl);
   }
 
-  // カラーdatalistはユーザーがフォーカスした時だけ取得（起動時は取得しない）
+  // datalistを非同期で更新（キャッシュあれば即時、なければAPI取得）
   if(matMaster?.material_id) {
     if(_materialRows[idx]) _materialRows[idx]._material_id = matMaster.material_id;
-    // キャッシュがあれば即時更新
-    const cached = _matColorCache[matMaster.material_id];
-    if(cached) {
-      colorDl.innerHTML = [...new Set(cached.map(c=>c.color_code).filter(Boolean))].map(code=>{
-        const f=cached.find(x=>x.color_code===code);
-        return `<option value="${esc(code)}">${esc(code)}${f?.color_name?' '+esc(f.color_name):''}${f?.unit_price?' ('+f.unit_price+'円)':''}`;
-      }).join('');
-    }
-    // キャッシュがなければフォーカス時に取得（ここでは何もしない）
+    // 非同期でdatalistを更新（表示後に実行）
+    setTimeout(()=>loadMatColorDl(idx), 0);
   }
 
   calcRowTotal(idx);
@@ -1038,23 +1031,40 @@ function calcMatTotal() {
 // カラーdatalistをフォーカス時だけ取得（遅延読み込みで軽量化）
 async function loadMatColorDl(idx) {
   const matId = _materialRows[idx]?._material_id;
-  if(!matId) return;
-  // キャッシュがあればスキップ
-  if(_matColorCache[matId]) return;
+  if(!matId) {
+    // material_idが未設定の場合は品名から逆引き
+    const pName = getMF(idx,'product_name');
+    const pNo   = getMF(idx,'product_no');
+    const mat   = _masters.materials.find(m=>m.product_name===pName||m.product_no===pNo);
+    if(mat && _materialRows[idx]) {
+      _materialRows[idx]._material_id = mat.material_id;
+      await loadMatColorDl(idx); // 再帰で再実行
+    }
+    return;
+  }
 
-  const res = await api('material_color_prices.get', {material_id: matId});
-  const items = res?.items||[];
-  _matColorCache[matId] = items;
+  // キャッシュがあれば即時反映
+  let items = _matColorCache[matId];
+  if(!items) {
+    const res = await api('material_color_prices.get', {material_id: matId});
+    items = res?.items||[];
+    _matColorCache[matId] = items;
+  }
+  if(!items.length) return;
 
   // カラーdatalist更新
   const colorDl = document.getElementById('dl-mat-colors-'+idx);
   if(colorDl) {
-    colorDl.innerHTML = [...new Set(items.map(c=>c.color_code).filter(Boolean))].map(code=>{
-      const f = items.find(x=>x.color_code===code);
-      return `<option value="${esc(code)}">${esc(code)}${f?.color_name?' '+esc(f.color_name):''}${f?.unit_price?' ('+f.unit_price+'円)':''}`;
+    // 現在選択中の規格でフィルター
+    const currentSpec = getMF(idx,'spec')||'';
+    const filtered = currentSpec ? items.filter(c=>(c.spec||'')===currentSpec) : items;
+    const codes = [...new Set(filtered.map(c=>c.color_code).filter(Boolean))];
+    colorDl.innerHTML = codes.map(code=>{
+      const f = filtered.find(x=>x.color_code===code);
+      return `<option value="${esc(code)}">${esc(code)}${f?.color_name?' ('+esc(f.color_name)+')':''}${f?.unit_price?' '+f.unit_price+'円':''}`;
     }).join('');
   }
-  // 規格datalist更新
+  // 規格datalist更新（全規格を候補に）
   const specDl = document.getElementById('dl-spec-'+idx);
   if(specDl) {
     const specs = [...new Set(items.map(c=>c.spec||'').filter(Boolean))];
@@ -2310,6 +2320,8 @@ async function renderCostTab() {
   const totalProcCost = [...visibleProcItems, ...MANUAL_ITEMS, ...extraItems]
     .reduce((a,i)=>a+(parseFloat(allVal(i))||parseFloat(i.val)||0),0);
   const totalCostAvg  = Math.round(matCostAvg + totalProcCost);
+  const markupRate    = parseFloat(ce.markup_rate)||0;
+  const sellPrice     = parseFloat(ce.sell_price)||0;
 
   let html = `<div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start">
   <!-- 左：設定 -->
