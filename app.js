@@ -312,6 +312,9 @@ async function openProduct(style_code) {
     name: res.item['product_color'+(i+1)+'_name']||'',
   }));
   _currentFsTab='product';
+  _matColorCols = 3; // 品番を開くたびにリセット
+  _matColorCache = {}; // カラーキャッシュもリセット
+  Object.keys(_tabCache).forEach(k=>delete _tabCache[k]); // タブキャッシュリセット
   document.getElementById('fs-badge').innerHTML=statusBadge(res.item.status);
   document.getElementById('fs-tabs').innerHTML=
     '<button class="fs-tab active" id="fstab-product"    onclick="switchFsTab(\'product\')">📋 製品シート</button>'+
@@ -351,8 +354,8 @@ function closePdfMenu(e) {
 }
 
 async function switchFsTab(tab) {
-  // 資材シートは切り替え前に保存
-  if(_currentFsTab==='materials' && tab!=='materials') await saveMaterialsData();
+  // 資材シートは切り替え前に保存（内容があれば）
+  if(_currentFsTab==='materials' && tab!=='materials' && _materialRows.some(r=>r.product_name||r.product_no)) await saveMaterialsData();
   _currentFsTab=tab;
   document.querySelectorAll('.fs-tab').forEach(t=>t.classList.remove('active'));
   const b=document.getElementById('fstab-'+tab); if(b) b.classList.add('active');
@@ -612,6 +615,7 @@ function collectProductForm() {
     product_name_en:   g('f-name-en'),
     brand:             g('f-brand'),
     client_id:         document.getElementById('f-client-id')?.value || document.getElementById('f-client-free')?.value||'',
+    client_name:       _masters.customers.find(c=>c.customer_id===(document.getElementById('f-client-id')?.value||''))?.customer_name || document.getElementById('f-client-free')?.value||'',
     item_code:         g('f-item'),
     item_name:         ITEMS.find(i=>i.code===g('f-item'))?.name||'',
     year:              g('f-year'),
@@ -834,8 +838,13 @@ function addMatColorColNew() {
 
 const _matFields = ['product_no','product_name','spec','applicable_sizes','category','usage_location',
   'usage_quantity','unit','loss_rate','supplier_name','maker_name','memo','delivery_date',
-  'col1_matcode','col1_price','col2_matcode','col2_price','col3_matcode','col3_price',
-  'col4_matcode','col4_price','col5_matcode','col5_price','col6_matcode','col6_price','col7_matcode','col7_price'];
+  'col1_matcode','col1_matcname','col1_price',
+  'col2_matcode','col2_matcname','col2_price',
+  'col3_matcode','col3_matcname','col3_price',
+  'col4_matcode','col4_matcname','col4_price',
+  'col5_matcode','col5_matcname','col5_price',
+  'col6_matcode','col6_matcname','col6_price',
+  'col7_matcode','col7_matcname','col7_price'];
 
 function appendMatRow(tbody, r, idx, supOpts) {
   const sN = s => s.partner_name||s.supplier_name||'';
@@ -981,7 +990,7 @@ function getMF(idx,f) {
 function calcRowTotal(idx) {
   const qty  = parseFloat(getMF(idx,'usage_quantity'))||0;
   const loss = (parseFloat(getMF(idx,'loss_rate'))||0)/100;
-  const method = document.getElementById('cost-calc-method')?.value || _currentProduct.cost_calc_method||'average';
+  const method = _currentProduct.cost_calc_method||'average';
 
   let total = 0;
   if(method==='average') {
@@ -1181,10 +1190,11 @@ async function saveMaterialsData() {
     if(!no && !name) return;
     const o = { material_slot: String(rows.length+1).padStart(2,'0') };
     _matFields.forEach(f=>{ o[f] = getMF(idx,f); });
-    // カラー単価
+    // カラー単価・カラー名
     for(let n=1;n<=_matColorCols;n++){
-      o['col'+n+'_matcode'] = getMF(idx,'col'+n+'_matcode');
-      o['col'+n+'_price']   = getMF(idx,'col'+n+'_price');
+      o['col'+n+'_matcode']  = getMF(idx,'col'+n+'_matcode');
+      o['col'+n+'_matcname'] = getMF(idx,'col'+n+'_matcname');
+      o['col'+n+'_price']    = getMF(idx,'col'+n+'_price');
     }
     rows.push(o);
   });
@@ -1227,89 +1237,6 @@ function zipInput(zipId, addrId) {
   </div>`;
 }
 let _orderQtyData = {}; // {color_code: {size_name: qty}}
-
-async function renderOrderQtyTab() {
-  const res = await api('order_qty.get', {style_code: _currentProduct.style_code});
-  const rows = res?.items || [];
-  // データをマップに変換
-  _orderQtyData = {};
-  rows.forEach(r => {
-    if (!_orderQtyData[r.color_code]) _orderQtyData[r.color_code] = {};
-    _orderQtyData[r.color_code][r.size_name] = Number(r.quantity)||0;
-  });
-
-  const colors = _productColors.filter(c=>c.code);
-  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
-
-  if (!colors.length) { document.getElementById('fs-body').innerHTML='<div class="empty-state"><div class="icon">🎨</div><p>製品シートでカラーを登録してください</p></div>'; return; }
-  if (!sizes.length)  { document.getElementById('fs-body').innerHTML='<div class="empty-state"><div class="icon">📐</div><p>製品シートでサイズ展開を登録してください</p></div>'; return; }
-
-  let html = `<div class="section-card">
-    <h3>📊 発注数量（カラー × サイズ）</h3>
-    <p style="font-size:12px;color:var(--c-text2);margin-bottom:14px">各セルに発注数量を入力してください</p>
-    <div style="overflow-x:auto"><table class="material-table" style="min-width:auto">
-    <thead><tr><th style="min-width:120px">カラー</th>`;
-  sizes.forEach(s => { html += `<th style="width:70px;text-align:right">${esc(s)}</th>`; });
-  html += `<th style="width:70px;text-align:right;background:#EEF2FD;color:#2B5CE6">合計</th></tr></thead><tbody>`;
-
-  colors.forEach(c => {
-    html += `<tr><td style="font-weight:600">${esc(c.code)} ${esc(c.name)}</td>`;
-    sizes.forEach(s => {
-      const v = (_orderQtyData[c.code]||{})[s] || '';
-      html += `<td><input type="number" min="0" data-color="${esc(c.code)}" data-size="${esc(s)}" value="${v}" placeholder="0" oninput="updateQtyTotal()" style="width:60px;text-align:right;border:none;background:transparent;font-size:13px"></td>`;
-    });
-    html += `<td id="row-total-${esc(c.code)}" style="text-align:right;font-weight:700;color:var(--c-primary);padding-right:8px">-</td></tr>`;
-  });
-
-  // 合計行
-  html += `<tr style="background:#EEF2FD"><td style="font-weight:700;color:#2B5CE6">合計</td>`;
-  sizes.forEach(s => { html += `<td id="col-total-${esc(s)}" style="text-align:right;font-weight:700;color:#2B5CE6">-</td>`; });
-  html += `<td id="grand-total" style="text-align:right;font-weight:700;font-size:15px;color:#2B5CE6">-</td></tr>`;
-  html += `</tbody></table></div></div>`;
-  document.getElementById('fs-body').innerHTML = html;
-  updateQtyTotal();
-}
-
-function updateQtyTotal() {
-  const colors = _productColors.filter(c=>c.code);
-  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
-  const colTotals = {}; sizes.forEach(s=>{ colTotals[s]=0; });
-  let grand = 0;
-  colors.forEach(c => {
-    let rowTotal = 0;
-    sizes.forEach(s => {
-      const v = parseInt(document.querySelector(`[data-color="${c.code}"][data-size="${s}"]`)?.value)||0;
-      rowTotal += v; colTotals[s] += v; grand += v;
-    });
-    const rt = document.getElementById('row-total-'+c.code);
-    if(rt) rt.textContent = rowTotal.toLocaleString();
-  });
-  sizes.forEach(s => {
-    const ct = document.getElementById('col-total-'+s);
-    if(ct) ct.textContent = colTotals[s].toLocaleString();
-  });
-  const gt = document.getElementById('grand-total');
-  if(gt) gt.textContent = grand.toLocaleString();
-}
-
-async function saveOrderQty() {
-  const colors = _productColors.filter(c=>c.code);
-  const sizes  = (_currentProduct.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
-  const rows = [];
-  colors.forEach(c => {
-    sizes.forEach(s => {
-      const v = parseInt(document.querySelector(`[data-color="${c.code}"][data-size="${s}"]`)?.value)||0;
-      if(v>0) rows.push({color_code:c.code, color_name:c.name, size_name:s, quantity:v});
-    });
-  });
-  const res = await api('order_qty.save', {style_code:_currentProduct.style_code, rows});
-  if(!res||!res.ok) { toast('保存失敗','error'); return; }
-  toast('発注数量を保存しました','success');
-}
-
-// ===== 工程タブ =====
-let _processRows = [];
-const PROCESS_STATUS = {pending:'未着手', in_progress:'進行中', completed:'完了', cancelled:'中止'};
 
 async function renderProcessesTab() {
   const res = await api('processes.get', {style_code: _currentProduct.style_code});
@@ -1766,7 +1693,7 @@ async function generateProcessOrderPDF() {
 
   for(const [key,g] of Object.entries(groups)) {
     const gi = Object.keys(groups).indexOf(key);
-    const noRes = await api('order_no.generate', {type:'S'});
+    const noRes = await api('order_no.generate', {type:'K'});
     const orderNo = noRes?.order_no||'RL-S-??????';
     const processNames = g.processes.map(r=>r.process_name).join('・');
     const plannedDate = g.processes.map(r=>r.planned_date).filter(Boolean).sort().pop()||'';
@@ -1958,23 +1885,44 @@ async function pdfOrderLots() {
   const prodColors = _productColors.filter(c=>c.code);
   const sizes = (p.size_range||'').split('/').map(s=>s.trim()).filter(Boolean);
 
-  // チェックされたロットのみ
-  const checkedLots = _orderLots.filter((_,li)=>document.getElementById('lot-chk-'+li)?.checked);
-  if(!checkedLots.length){ toast('PDF発行するロットにチェックを入れてください','error'); return; }
+  // まず現在の入力内容を保存
+  await saveOrderLots();
 
-  // 取引先（得意先）選択
-  const clientName = _currentProduct.client_name || _currentProduct.client_id ||
-    _masters.customers.find(c=>c.customer_id===_currentProduct.client_id)?.customer_name || '';
+  // 保存後にGASから最新データを取得
+  const lotRes = await api('order_lots.get',{style_code:p.style_code});
+  const savedLots = lotRes?.items||[];
+
+  // チェックされたロットのみ（_orderLotsのインデックスと一致）
+  const checkedIdxs = _orderLots.map((_,li)=>li).filter(li=>document.getElementById('lot-chk-'+li)?.checked);
+  if(!checkedIdxs.length){ toast('PDF発行するロットにチェックを入れてください','error'); return; }
+
+  const clientName = _masters.customers.find(c=>c.customer_id===p.client_id)?.customer_name || p.client_id || '';
 
   let pages = '', pageIdx = 0;
 
-  for(const lot of checkedLots) {
-    const li = _orderLots.indexOf(lot);
+  for(const li of checkedIdxs) {
+    const lot = savedLots[li] || _orderLots[li];
+    if(!lot) continue;
+
     const lotLabel = lot.lot_no===1 ? '初回発注' : `追加発注-${lot.lot_no-1}`;
 
-    // 数量テーブル
+    // 数量はGAS保存済みデータから取得
     const qtyMap = {};
-    (lot.quantities||[]).forEach(q=>{ if(!qtyMap[q.color_code]) qtyMap[q.color_code]={}; qtyMap[q.color_code][q.size_name]=Number(q.quantity)||0; });
+    (lot.quantities||[]).forEach(q=>{
+      if(!qtyMap[q.color_code]) qtyMap[q.color_code]={};
+      qtyMap[q.color_code][q.size_name] = Number(q.quantity)||0;
+    });
+
+    // DOMからも補完（未保存の場合）
+    prodColors.forEach(c=>{
+      sizes.forEach(s=>{
+        const el = document.querySelector(`[data-lot="${li}"][data-col="${c.code}"][data-sz="${s}"]`);
+        if(el) {
+          const v = parseInt(el.value)||0;
+          if(v>0) { if(!qtyMap[c.code]) qtyMap[c.code]={}; qtyMap[c.code][s]=v; }
+        }
+      });
+    });
 
     const colTotals = {}; sizes.forEach(s=>colTotals[s]=0);
     let grandTotal = 0;
@@ -1986,13 +1934,15 @@ async function pdfOrderLots() {
         rowTotal += v; colTotals[s] += v; grandTotal += v;
         return `<td style="text-align:right">${v||''}</td>`;
       }).join('');
-      return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700">${rowTotal||''}</td></tr>`;
+      return `<tr><td>${esc(c.code)} ${esc(c.name)}</td>${cells}<td style="text-align:right;font-weight:700;color:#2B5CE6">${rowTotal||''}</td></tr>`;
     }).join('');
 
     const totCells = sizes.map(s=>`<td style="text-align:right;font-weight:700;color:#2B5CE6">${colTotals[s]||''}</td>`).join('');
 
     const noRes = await api('order_no.generate',{type:'P'});
-    const orderNo = noRes?.order_no || 'RL-P-??????';
+    const orderNo = noRes?.order_no || '2606-P-0001';
+    const orderDate = lot.order_date || document.getElementById('lot-date-'+li)?.value || '';
+    const memo      = lot.memo       || document.getElementById('lot-memo-'+li)?.value  || '';
 
     pages += `${pageIdx>0?'<div class="page-break"></div>':''}
     <div class="header">
@@ -2008,9 +1958,9 @@ async function pdfOrderLots() {
       <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
       <div class="info-row"><span class="lbl">ブランド：</span><span class="val">${esc(p.brand||'')}</span></div>
       <div class="info-row"><span class="lbl">年度/シーズン：</span><span class="val">${esc(String(p.year||''))} ${esc(p.season||'')}</span></div>
-      <div class="info-row"><span class="lbl">発注日：</span><span class="val">${esc(lot.order_date||document.getElementById('lot-date-'+li)?.value||'')}</span></div>
+      <div class="info-row"><span class="lbl">発注日：</span><span class="val">${esc(orderDate)}</span></div>
     </div>
-    <div class="sec-title">発注数量</div>
+    <div class="sec-title">発注数量　合計：<strong style="font-size:12pt;color:#2B5CE6">${grandTotal.toLocaleString()}着</strong></div>
     <table>
       <thead><tr>
         <th>カラー</th>
@@ -2020,16 +1970,15 @@ async function pdfOrderLots() {
       <tbody>
         ${qRows}
         <tr class="total-row">
-          <td>合計</td>${totCells}
+          <td style="font-weight:700">合計</td>${totCells}
           <td style="text-align:right;font-weight:700;font-size:12pt;color:#2B5CE6">${grandTotal.toLocaleString()}</td>
         </tr>
       </tbody>
     </table>
-    ${lot.memo||document.getElementById('lot-memo-'+li)?.value?`
-    <div style="margin-top:8pt"><div class="sec-title">備考</div>
-    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(lot.memo||document.getElementById('lot-memo-'+li)?.value||'')}</div></div>`:''}
+    ${memo?`<div style="margin-top:8pt"><div class="sec-title">備考</div>
+    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(memo)}</div></div>`:''}
     <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
-    <div class="footer"><span>Raises Lab Co., Ltd. / ${esc(orderNo)}</span><span>${pageIdx+1} / ${checkedLots.length}</span></div>`;
+    <div class="footer"><span>Raises Lab Co., Ltd. / ${esc(orderNo)}</span><span>${pageIdx+1} / ${checkedIdxs.length}</span></div>`;
     pageIdx++;
   }
 
