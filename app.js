@@ -32,6 +32,13 @@ const ITEMS = [
 const CATEGORIES = ['生地','裏地','芯地','副資材','下げ札等','その他'];
 const UNITS = ['m','個','枚','本','組','式','yd','kg','g'];
 const PROCESS_TYPES = ['縫製','裁断','プリント','刺繍','染色','整理加工','生地加工','検品','その他'];
+const PROCESS_STATUS = {pending:'未着手', in_progress:'進行中', completed:'完了', cancelled:'中止'};
+
+// タブキャッシュ・カラーキャッシュ
+let _processRows = [];
+let _orderLots   = [];
+let _tabCache    = {};
+let _matColorCache = {};
 
 // ===== JSONP通信（全API共通） =====
 function callGAS(payload) {
@@ -148,7 +155,6 @@ function forceLogout() {
 
 // ===== 起動 =====
 // タブデータキャッシュ（重複取得防止）
-const _tabCache = {};
 function clearTabCache(style_code) { 
   Object.keys(_tabCache).forEach(k=>{ if(k.startsWith(style_code)) delete _tabCache[k]; });
 }
@@ -730,7 +736,6 @@ function confirmSize() {
 }
 
 // ===== 資材シート =====
-let _matColorCache = {};
 
 async function renderMaterialsTab() {
   const res = await api('product_materials.get', {style_code:_currentProduct.style_code});
@@ -1145,7 +1150,6 @@ async function onMatSpecChange(idx) {
 async function onMatColorInput(idx, colNum) {
   const code    = getMF(idx,'col'+colNum+'_matcode');
   const spec    = getMF(idx,'spec');
-  const matId   = _materialRows[idx]?._material_id;
   const nameEl  = document.querySelector(`[data-r="${idx}"][data-f="col${colNum}_matcname"]`);
   const priceEl = document.querySelector(`[data-r="${idx}"][data-f="col${colNum}_price"]`);
 
@@ -1155,12 +1159,33 @@ async function onMatColorInput(idx, colNum) {
     calcRowTotal(idx);
     return;
   }
+
+  // material_idが未設定なら品名・品番からマスタを逆引き
+  let matId = _materialRows[idx]?._material_id;
+  if(!matId) {
+    const pName = getMF(idx,'product_name');
+    const pNo   = getMF(idx,'product_no');
+    const mat   = _masters.materials.find(m=>m.product_name===pName||m.product_no===pNo);
+    if(mat) {
+      matId = mat.material_id;
+      if(_materialRows[idx]) _materialRows[idx]._material_id = matId;
+    }
+  }
   if(!matId) return;
 
-  const res = await api('material_color_prices.get_price',{material_id:matId, spec, color_code:code});
-  if(res?.item) {
-    if(nameEl)  nameEl.value  = res.item.color_name||'';
-    if(priceEl) priceEl.value = res.item.unit_price||'';
+  // キャッシュがあれば使う
+  let items = _matColorCache[matId];
+  if(!items) {
+    const res2 = await api('material_color_prices.get',{material_id:matId});
+    items = res2?.items||[];
+    _matColorCache[matId] = items;
+  }
+  // specとcolor_codeで絞り込み
+  const matched = items.find(c=>c.color_code===code && (c.spec||'')===(spec||''))
+                || items.find(c=>c.color_code===code); // specが違っても候補表示
+  if(matched) {
+    if(nameEl)  nameEl.value  = matched.color_name||'';
+    if(priceEl) priceEl.value = matched.unit_price||'';
     calcRowTotal(idx);
   }
 }
@@ -1797,7 +1822,6 @@ async function pdfProcessSheet() {
 }
 
 // ===== ① 製品発注ロット管理 =====
-let _orderLots = [];
 
 async function renderOrderLotsTab() {
   const res = await api('order_lots.get', {style_code:_currentProduct.style_code});
@@ -2250,31 +2274,41 @@ async function renderCostTab() {
   const patternCost  = parseFloat(ce.pattern_cost)||0;
   const importCost   = parseFloat(ce.import_cost)||0;
   const otherCost    = parseFloat(ce.other_cost)||0;
-  const markupRate   = parseFloat(ce.markup_rate)||0;
-  const sellPrice    = parseFloat(ce.sell_price)||0;
 
-  const COST_ITEMS = [
-    {key:'sewing_cost',   label:'工賃/製品買',    val:sewingCost,   from:'工程'},
-    {key:'cutting_cost',  label:'外注裁断賃',      val:cuttingCost,  from:'工程'},
-    {key:'button_cost',   label:'釦付/釦ホール',   val:buttonCost,   from:'工程'},
-    {key:'sample_cost',   label:'サンプル費用割',  val:sampleCost,   from:'手入力'},
-    {key:'pattern_cost',  label:'パターン費用割',  val:patternCost,  from:'手入力'},
-    {key:'dyeing_cost',   label:'染め/洗い加工',   val:dyeingCost,   from:'工程'},
-    {key:'import_cost',   label:'輸入経費',        val:importCost,   from:'手入力'},
-    {key:'outsource1',    label:'外注加工-1',      val:outsource1,   from:'工程'},
-    {key:'outsource2',    label:'外注加工-2',      val:outsource2,   from:'工程'},
-    {key:'outsource3',    label:'外注加工-3',      val:outsource3,   from:'工程'},
-    {key:'inhouse1',      label:'社内加工-1',      val:inhouse1,     from:'工程'},
-    {key:'inhouse2',      label:'社内加工-2',      val:inhouse2,     from:'工程'},
-    {key:'inhouse3',      label:'社内加工-3',      val:inhouse3,     from:'工程'},
-    {key:'washing_cost',  label:'洗い仕上',        val:washingCost,  from:'工程'},
-    {key:'embroidery',    label:'手振刺繍',        val:embroidery,   from:'工程'},
-    {key:'piecework',     label:'内職',            val:piecework,    from:'工程'},
-    {key:'name_cost',     label:'ネーム賃',        val:nameCost,     from:'工程'},
-    {key:'other_cost',    label:'その他',          val:otherCost,    from:'手入力'},
+  // 工程から転記された費目のみ表示（値がある項目のみ）＋保存済み手入力項目
+  const PROC_ITEMS = [
+    {key:'sewing_cost',  label:'工賃/製品買',   procVal:procCosts.sewing,     savedVal:parseFloat(ce.sewing_cost)||0},
+    {key:'cutting_cost', label:'外注裁断賃',     procVal:procCosts.cutting,    savedVal:parseFloat(ce.cutting_cost)||0},
+    {key:'button_cost',  label:'釦付/釦ホール',  procVal:procCosts.button,     savedVal:parseFloat(ce.button_cost)||0},
+    {key:'dyeing_cost',  label:'染め/洗い加工',  procVal:procCosts.dyeing,     savedVal:parseFloat(ce.dyeing_cost)||0},
+    {key:'outsource1',   label:'外注加工-1',     procVal:procCosts.outsource1, savedVal:parseFloat(ce.outsource1)||0},
+    {key:'outsource2',   label:'外注加工-2',     procVal:procCosts.outsource2, savedVal:parseFloat(ce.outsource2)||0},
+    {key:'outsource3',   label:'外注加工-3',     procVal:procCosts.outsource3, savedVal:parseFloat(ce.outsource3)||0},
+    {key:'inhouse1',     label:'社内加工-1',     procVal:procCosts.inhouse1,   savedVal:parseFloat(ce.inhouse1)||0},
+    {key:'inhouse2',     label:'社内加工-2',     procVal:procCosts.inhouse2,   savedVal:parseFloat(ce.inhouse2)||0},
+    {key:'inhouse3',     label:'社内加工-3',     procVal:procCosts.inhouse3,   savedVal:parseFloat(ce.inhouse3)||0},
+    {key:'washing_cost', label:'洗い仕上',        procVal:procCosts.washing,    savedVal:parseFloat(ce.washing_cost)||0},
+    {key:'embroidery',   label:'手振刺繍',        procVal:procCosts.embroidery, savedVal:parseFloat(ce.embroidery)||0},
+    {key:'piecework',    label:'内職',            procVal:procCosts.piecework,  savedVal:parseFloat(ce.piecework)||0},
+    {key:'name_cost',    label:'ネーム賃',        procVal:procCosts.name,       savedVal:parseFloat(ce.name_cost)||0},
   ];
+  // 手入力専用費目（常に表示）
+  const MANUAL_ITEMS = [
+    {key:'sample_cost',  label:'サンプル費用割', val:parseFloat(ce.sample_cost)||0},
+    {key:'pattern_cost', label:'パターン費用割', val:parseFloat(ce.pattern_cost)||0},
+    {key:'import_cost',  label:'輸入経費',       val:parseFloat(ce.import_cost)||0},
+    {key:'other_cost',   label:'その他',         val:parseFloat(ce.other_cost)||0},
+  ];
+  // 追加手入力行（保存済み extra_items）
+  let extraItems = [];
+  try { extraItems = JSON.parse(ce.extra_items||'[]'); } catch(e){}
 
-  const totalProcCost = COST_ITEMS.reduce((a,item)=>a+(parseFloat(item.val)||0), 0);
+  // 工程転記 or 保存済みで値があるものを表示
+  const visibleProcItems = PROC_ITEMS.filter(i=>i.procVal>0||i.savedVal>0);
+  const allVal = item => item.savedVal || item.procVal || 0;
+
+  const totalProcCost = [...visibleProcItems, ...MANUAL_ITEMS, ...extraItems]
+    .reduce((a,i)=>a+(parseFloat(allVal(i))||parseFloat(i.val)||0),0);
   const totalCostAvg  = Math.round(matCostAvg + totalProcCost);
 
   let html = `<div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start">
@@ -2284,35 +2318,56 @@ async function renderCostTab() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
         <h3>💰 原価・見積設定</h3>
         <select id="ce-method" style="font-size:12px" onchange="renderCostTab()">
-          <option value="average" ${calcMethod==='average'?'selected':''}>平均法（全カラー平均）</option>
+          <option value="average" ${calcMethod==='average'?'selected':''}>平均法</option>
           <option value="bycolor" ${calcMethod==='bycolor'?'selected':''}>カラー毎</option>
         </select>
-        <span style="font-size:11px;color:var(--c-text2)">※「工程」は工程タブから自動転記</span>
       </div>
       <table class="master-table" style="font-size:12px">
-        <thead><tr><th>費目</th><th style="text-align:right">円/着</th><th style="width:60px">入力元</th></tr></thead>
+        <thead><tr><th>費目</th><th style="text-align:right">円/着</th><th style="width:55px">入力元</th></tr></thead>
         <tbody>
           <tr style="background:#EEF2FD"><td colspan="3" style="font-weight:600;color:#2B5CE6">📦 資材費</td></tr>
           ${calcMethod==='bycolor'
-            ? prodColors.map(c=>`<tr><td style="padding-left:16px">${esc(c.name)}</td>
+            ? prodColors.map(c=>`<tr><td style="padding-left:12px">${esc(c.name)}</td>
                 <td style="text-align:right;font-weight:600">${Math.round(matCostByColor[c.code]||0).toLocaleString()}</td>
-                <td style="font-size:10px;color:var(--c-text2)">自動</td></tr>`).join('')
-            : `<tr><td style="padding-left:16px">資材費（平均）</td>
+                <td style="font-size:10px;color:#888">自動</td></tr>`).join('')
+            : `<tr><td style="padding-left:12px">資材費（平均）</td>
                 <td style="text-align:right;font-weight:600">${matCostAvg.toLocaleString()}</td>
-                <td style="font-size:10px;color:var(--c-text2)">自動</td></tr>`
+                <td style="font-size:10px;color:#888">自動</td></tr>`
           }
-          <tr style="background:#EEF2FD"><td colspan="3" style="font-weight:600;color:#2B5CE6">🔧 加工費</td></tr>
-          ${COST_ITEMS.map(item=>`<tr>
-            <td style="padding-left:16px">${item.label}</td>
+          <tr style="background:#EEF2FD"><td colspan="3" style="font-weight:600;color:#2B5CE6">🔧 工程加工費（工程タブから転記）</td></tr>
+          ${visibleProcItems.length===0
+            ? `<tr><td colspan="3" style="text-align:center;color:var(--c-text3);font-size:11px;padding:8px">工程タブで外注費を入力してください</td></tr>`
+            : visibleProcItems.map(item=>`<tr>
+              <td style="padding-left:12px">${item.label}</td>
+              <td><input type="number" id="ce-${item.key}" value="${allVal(item)||''}" placeholder="0"
+                style="width:100%;text-align:right;font-size:12px" oninput="updateCostTotal()"></td>
+              <td style="font-size:10px;color:#2B5CE6">工程</td>
+            </tr>`).join('')
+          }
+          <tr style="background:#EEF2FD"><td colspan="3" style="font-weight:600;color:#854F0B">✏️ 手入力費目</td></tr>
+          ${MANUAL_ITEMS.map(item=>`<tr>
+            <td style="padding-left:12px">${item.label}</td>
             <td><input type="number" id="ce-${item.key}" value="${item.val||''}" placeholder="0"
               style="width:100%;text-align:right;font-size:12px" oninput="updateCostTotal()"></td>
-            <td style="font-size:10px;color:${item.from==='工程'?'#2B5CE6':'#888'}">${item.from}</td>
+            <td style="font-size:10px;color:#854F0B">手入力</td>
           </tr>`).join('')}
+          <tbody id="ce-extra-tbody">
+          ${extraItems.map((item,ei)=>`<tr id="ce-extra-${ei}">
+            <td style="padding-left:12px"><input type="text" id="ce-extra-label-${ei}" value="${esc(item.label||'')}" placeholder="費目名" style="width:100%;font-size:11px"></td>
+            <td><input type="number" id="ce-extra-val-${ei}" value="${item.val||''}" placeholder="0" style="width:100%;text-align:right;font-size:12px" oninput="updateCostTotal()"></td>
+            <td><button class="del-btn" style="font-size:10px" onclick="removeExtraItem(${ei})">✕</button></td>
+          </tr>`).join('')}
+          </tbody>
         </tbody>
         <tfoot>
+          <tr>
+            <td colspan="3" style="padding:4px 8px">
+              <button class="btn btn-secondary btn-sm" style="font-size:11px" onclick="addExtraItem()">＋ 費目を追加</button>
+            </td>
+          </tr>
           <tr style="background:#1B2A4A;color:white">
             <td style="font-weight:700">原価合計</td>
-            <td id="ce-total" style="text-align:right;font-weight:700;font-size:14px">${totalCostAvg.toLocaleString()}</td>
+            <td id="ce-total" data-mat-cost="${matCostAvg}" data-proc-cost="${totalProcCost}" style="text-align:right;font-weight:700;font-size:14px">${totalCostAvg.toLocaleString()}</td>
             <td></td>
           </tr>
         </tfoot>
@@ -2322,7 +2377,7 @@ async function renderCostTab() {
       <h3 style="margin-bottom:10px">💴 見積・売価設定</h3>
       <div class="form-row form-row-3">
         <div class="form-group"><label>売価（円）</label>
-          <input type="number" id="ce-sell" value="${sellPrice||''}" placeholder="0" style="font-size:14px;font-weight:700">
+          <input type="number" id="ce-sell" value="${sellPrice||''}" placeholder="0" style="font-size:14px;font-weight:700" oninput="updateCostTotal()">
         </div>
         <div class="form-group"><label>利益率（%）</label>
           <input type="number" id="ce-markup" value="${markupRate||''}" placeholder="0" oninput="calcSellFromMarkup()">
@@ -2372,23 +2427,40 @@ async function renderCostTab() {
 }
 
 function updateCostTotal() {
-  const items = ['sewing_cost','cutting_cost','button_cost','sample_cost','pattern_cost',
-    'dyeing_cost','import_cost','outsource1','outsource2','outsource3',
-    'inhouse1','inhouse2','inhouse3','washing_cost','embroidery','piecework','name_cost','other_cost'];
+  const procKeys = ['sewing_cost','cutting_cost','button_cost','dyeing_cost',
+    'outsource1','outsource2','outsource3','inhouse1','inhouse2','inhouse3',
+    'washing_cost','embroidery','piecework','name_cost'];
+  const manualKeys = ['sample_cost','pattern_cost','import_cost','other_cost'];
   let total = 0;
-  items.forEach(k=>{ total += parseFloat(document.getElementById('ce-'+k)?.value)||0; });
-  // 資材費（表示から取得）
-  const matLine = document.querySelector('#ce-total')?.closest('table')?.querySelector('tbody tr:nth-child(2) td:nth-child(2)');
-  const matCost = parseInt((matLine?.textContent||'0').replace(/[^0-9]/g,''))||0;
-  const grandTotal = Math.round(matCost + total);
-  const el = document.getElementById('ce-total');
-  if(el) el.textContent = grandTotal.toLocaleString();
-  // 粗利表示
-  const sell = parseFloat(document.getElementById('ce-sell')?.value)||0;
-  const gross = sell ? sell - grandTotal : 0;
-  const rate  = sell ? (gross/sell*100).toFixed(1) : 0;
-  const ge = document.getElementById('ce-gross');
-  if(ge && sell) ge.innerHTML = `粗利：<strong style="color:${gross>=0?'#0F6E56':'#CC2A2A'}">${gross.toLocaleString()}円</strong>（粗利率 ${rate}%）`;
+  [...procKeys,...manualKeys].forEach(k=>{
+    total += parseFloat(document.getElementById('ce-'+k)?.value)||0;
+  });
+  // 追加費目
+  document.querySelectorAll('[id^="ce-extra-val-"]').forEach(el=>{
+    total += parseFloat(el.value)||0;
+  });
+  // 資材費（現在の表示から取得）
+  const matCell = document.querySelector('#ce-total');
+  const matText = matCell?.closest('table')?.querySelector('tbody td[style*="font-weight:600"]');
+  // 資材費はgetの計算値を使う（DOMからは取れないのでtotalのみ更新）
+  const totalEl = document.getElementById('ce-total');
+  // 資材費を保持するために前回の合計から加工費のみ差し替え
+  const prevTotal = parseInt((totalEl?.textContent||'0').replace(/[^0-9]/g,''))||0;
+  // 資材費 = 前回合計 - 前回加工費（近似）→ 正確にはrenderCostTabで計算
+  if(totalEl) {
+    // 加工費のみ更新（資材費は renderCostTab が設定した値を保持）
+    totalEl.dataset.procCost = total;
+    const mat = parseInt(totalEl.dataset.matCost||'0')||0;
+    const grand = mat + total;
+    totalEl.textContent = grand.toLocaleString();
+    // 粗利表示
+    const sell = parseFloat(document.getElementById('ce-sell')?.value)||0;
+    const gross = sell ? sell - grand : 0;
+    const rate  = sell ? (gross/sell*100).toFixed(1) : 0;
+    const ge = document.getElementById('ce-gross');
+    if(ge && sell) ge.innerHTML = `粗利：<strong style="color:${gross>=0?'#0F6E56':'#CC2A2A'}">${gross.toLocaleString()}円</strong>（粗利率 ${rate}%）`;
+    else if(ge) ge.innerHTML = '';
+  }
 }
 
 function calcSellFromMarkup() {
@@ -2402,8 +2474,34 @@ function calcSellFromMarkup() {
   updateCostTotal();
 }
 
+function addExtraItem() {
+  const tbody = document.getElementById('ce-extra-tbody'); if(!tbody) return;
+  const ei = tbody.querySelectorAll('tr').length;
+  const tr = document.createElement('tr');
+  tr.id = 'ce-extra-'+ei;
+  tr.innerHTML = `
+    <td style="padding-left:12px"><input type="text" id="ce-extra-label-${ei}" placeholder="費目名" style="width:100%;font-size:11px"></td>
+    <td><input type="number" id="ce-extra-val-${ei}" placeholder="0" style="width:100%;text-align:right;font-size:12px" oninput="updateCostTotal()"></td>
+    <td><button class="del-btn" style="font-size:10px" onclick="removeExtraItem(${ei})">✕</button></td>`;
+  tbody.appendChild(tr);
+}
+
+function removeExtraItem(ei) {
+  document.getElementById('ce-extra-'+ei)?.remove();
+  updateCostTotal();
+}
+
 async function saveCostEstimate() {
   const g = id => parseFloat(document.getElementById(id)?.value)||0;
+  // 追加費目を収集
+  const extraItems = [];
+  document.querySelectorAll('[id^="ce-extra-label-"]').forEach(el=>{
+    const ei = el.id.replace('ce-extra-label-','');
+    const label = el.value||'';
+    const val   = parseFloat(document.getElementById('ce-extra-val-'+ei)?.value)||0;
+    if(label||val) extraItems.push({label, val});
+  });
+
   const res = await api('cost_estimate.save',{
     style_code:  _currentProduct.style_code,
     calc_method: document.getElementById('ce-method')?.value||'average',
@@ -2417,6 +2515,7 @@ async function saveCostEstimate() {
     embroidery:  g('ce-embroidery'),  piecework:   g('ce-piecework'),
     name_cost:   g('ce-name_cost'),   other_cost:  g('ce-other_cost'),
     markup_rate: g('ce-markup'),      sell_price:  g('ce-sell'),
+    extra_items: JSON.stringify(extraItems),
     memo: document.getElementById('ce-memo')?.value||'',
   });
   if(!res||!res.ok){toast('保存失敗','error');return;}
