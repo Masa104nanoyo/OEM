@@ -772,7 +772,6 @@ async function renderMaterialsTab() {
       <code style="background:var(--c-bg);padding:2px 8px;border-radius:4px;font-size:12px">${esc(_currentProduct.style_code)}</code>
       <button class="btn btn-secondary btn-sm" onclick="addMatRow()">＋ 行を追加</button>
       <button class="btn btn-secondary btn-sm" onclick="openMatSearchPopup()">🔍 資材マスタから追加</button>
-      ${numCols<7?`<button class="btn btn-secondary btn-sm" onclick="addMatColorColNew()">＋ カラー列を追加</button>`:''}
       <button class="btn btn-secondary btn-sm" onclick="pdfMaterialOrder()">📦 資材発注書</button>      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
         <span style="font-size:12px;color:var(--c-text2)">着単価計算：</span>
         <select id="cost-calc-method" onchange="saveCostCalcMethod(this.value)" style="font-size:12px">
@@ -868,8 +867,14 @@ function appendMatRow(tbody, r, idx, supOpts) {
     const matCname = r['col'+(n+1)+'_matcname']||'';
     const price    = r['col'+(n+1)+'_price']||'';
     const pc = prodColors[n];
+    const unitCost = price && r.usage_quantity
+      ? Math.round(parseFloat(r.usage_quantity)*parseFloat(price)*(1+(parseFloat(r.loss_rate)||0)/100))
+      : 0;
     return `<td style="padding:3px 4px;min-width:130px;background:${n%2===0?'#F7FAFF':'#EFF4FF'}">
-      <div style="font-size:9px;color:#2B5CE6;font-weight:600;margin-bottom:2px">${pc?esc(pc.name):'Col.'+(n+1)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+        <span style="font-size:9px;color:#2B5CE6;font-weight:600">${pc?esc(pc.name):'Col.'+(n+1)}</span>
+        <span id="rp-col-${idx}-${n+1}" style="font-size:9px;color:#0F6E56;font-weight:600">${unitCost?unitCost.toLocaleString()+'円':''}</span>
+      </div>
       <input type="text" data-r="${idx}" data-f="col${n+1}_matcode" value="${esc(matCode)}"
         placeholder="カラーコード" style="font-size:10px;width:100%;margin-bottom:1px;border-radius:3px"
         oninput="onMatColorInput(${idx},${n+1})"
@@ -969,7 +974,19 @@ function addMatRow() {
 }
 
 function delMatRow(idx) {
-  _matFields.forEach(f=>{ if(_materialRows[idx]) _materialRows[idx][f]=getMF(idx,f); });
+  // 削除前に全行の現在値をDOMから保存（カラー列含む）
+  _materialRows.forEach((_,i)=>{
+    if(!_materialRows[i]) return;
+    _matFields.forEach(f=>{ _materialRows[i][f] = getMF(i,f)||_materialRows[i][f]||''; });
+    for(let n=1;n<=_matColorCols;n++){
+      _materialRows[i]['col'+n+'_matcode']  = getMF(i,'col'+n+'_matcode')  ||_materialRows[i]['col'+n+'_matcode']  ||'';
+      _materialRows[i]['col'+n+'_matcname'] = getMF(i,'col'+n+'_matcname') ||_materialRows[i]['col'+n+'_matcname'] ||'';
+      _materialRows[i]['col'+n+'_price']    = getMF(i,'col'+n+'_price')    ||_materialRows[i]['col'+n+'_price']    ||'';
+    }
+    // _material_idも保持
+    // (すでに_materialRows[i]._material_idに保存済み)
+  });
+
   _materialRows.splice(idx,1);
   const tbody = document.getElementById('mat-tbody');
   if(tbody) {
@@ -988,30 +1005,29 @@ function getMF(idx,f) {
 function calcRowTotal(idx) {
   const qty  = parseFloat(getMF(idx,'usage_quantity'))||0;
   const loss = (parseFloat(getMF(idx,'loss_rate'))||0)/100;
-  const method = _currentProduct.cost_calc_method||'average';
 
-  let total = 0;
-  if(method==='average') {
-    // 平均法：全カラーの単価平均
-    const prices=[];
-    for(let n=1;n<=_matColorCols;n++){
-      const p=parseFloat(getMF(idx,'col'+n+'_price'));
-      if(p) prices.push(p);
-    }
-    const avg = prices.length ? prices.reduce((a,b)=>a+b,0)/prices.length : 0;
-    total = Math.round(qty * avg * (1+loss));
-  } else {
-    // カラー毎：Col.1の単価で代表表示（全カラー合計/カラー数）
-    const prices=[];
-    for(let n=1;n<=_matColorCols;n++){
-      const p=parseFloat(getMF(idx,'col'+n+'_price'));
-      if(p) prices.push(p);
-    }
-    total = prices.length ? Math.round(qty * (prices.reduce((a,b)=>a+b,0)/prices.length) * (1+loss)) : 0;
+  // 各カラーの着単価を計算
+  const perColor = [];
+  for(let n=1;n<=_matColorCols;n++){
+    const p = parseFloat(getMF(idx,'col'+n+'_price'))||0;
+    perColor.push(Math.round(qty * p * (1+loss)));
   }
 
-  const el=document.getElementById('rp-'+idx);
-  if(el) el.textContent = total ? total.toLocaleString()+'円' : '-';
+  // 行サマリー（rp-idx）：平均で表示
+  const valid = perColor.filter(v=>v>0);
+  const avg   = valid.length ? Math.round(valid.reduce((a,b)=>a+b,0)/valid.length) : 0;
+  const el = document.getElementById('rp-'+idx);
+  if(el) el.textContent = avg ? avg.toLocaleString()+'円/着(平均)' : '-';
+
+  // カラー別着単価をCol.ヘッダー上のラベルに表示
+  for(let n=1;n<=_matColorCols;n++){
+    const labelEl = document.getElementById(`rp-col-${idx}-${n}`);
+    if(labelEl) {
+      const v = perColor[n-1];
+      labelEl.textContent = v ? v.toLocaleString()+'円' : '';
+    }
+  }
+
   calcMatTotal();
 }
 
@@ -2912,24 +2928,24 @@ async function onShipZipInput(gi) {
 async function generateMaterialOrderPDF() {
   const p = _currentProduct;
   const groups = window._matOrderGroups||{};
-  let pages='', pageIdx=0;
   const totalPages = Object.keys(groups).length;
-  // 納期を資材行に転記するためのマップ {product_name+spec: delivery_date}
   const deliveryMap = {};
+
+  // 仕入先ごとのメールデータを保持
+  const emailDrafts = [];
 
   for(const [sup, supRows] of Object.entries(groups)) {
     const gi = Object.keys(groups).indexOf(sup);
-    const noRes = await api('order_no.generate',{type:'M'});
-    const orderNo   = noRes?.order_no||'RL-M-??????';
-    const orderType = document.getElementById('pop-type-'+gi)?.value||'量産';
-    const delivery  = document.getElementById('pop-delivery-'+gi)?.value||'';
-    const shipName  = document.getElementById('pop-ship-name-'+gi)?.value||'';
-    const shipZip   = document.getElementById('pop-ship-zip-'+gi)?.value||'';
-    const shipAddr  = document.getElementById('pop-ship-addr-'+gi)?.value||'';
-    const shipTel   = document.getElementById('pop-ship-tel-'+gi)?.value||'';
-    const note      = document.getElementById('pop-note-'+gi)?.value||'';
+    const noRes    = await api('order_no.generate',{type:'M'});
+    const orderNo  = noRes?.order_no||'2606-M-0001';
+    const orderType= document.getElementById('pop-type-'+gi)?.value||'量産';
+    const delivery = document.getElementById('pop-delivery-'+gi)?.value||'';
+    const shipName = document.getElementById('pop-ship-name-'+gi)?.value||'';
+    const shipZip  = document.getElementById('pop-ship-zip-'+gi)?.value||'';
+    const shipAddr = document.getElementById('pop-ship-addr-'+gi)?.value||'';
+    const shipTel  = document.getElementById('pop-ship-tel-'+gi)?.value||'';
+    const note     = document.getElementById('pop-note-'+gi)?.value||'';
 
-    // 納期を資材行マップに記録（ポップアップを閉じる前に取得）
     supRows.forEach(r=>{ deliveryMap[r.product_name+(r.spec||'')] = delivery; });
 
     let grandAmt=0;
@@ -2939,25 +2955,21 @@ async function generateMaterialOrderPDF() {
         const rowId=`r${gi}_${ri}_${resi}`;
         const qtyEl=document.getElementById('pop-qty-'+rowId);
         if(!qtyEl) break;
-        const qty=parseFloat(qtyEl.value)||0;
-        const price=parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
-        const amt=Math.round(qty*price);
-        grandAmt+=amt;
+        const qty  = parseFloat(qtyEl.value)||0;
+        const price= parseFloat(document.getElementById('pop-price-'+rowId)?.value)||0;
+        const amt  = Math.round(qty*price);
+        grandAmt  += amt;
         let colorDesc='';
-        for(let n=1;n<=7;n++){
-          const mc=r['col'+n+'_matcode']||'';
-          if(mc){colorDesc=mc;break;}
-        }
-        // 対応サイズ列は不要なので削除
+        for(let n=1;n<=7;n++){ const mc=r['col'+n+'_matcode']||''; if(mc){colorDesc=mc;break;} }
         detailRows.push(`<tr>
-          <td style="font-family:monospace;font-size:8pt">${esc(r.product_no||'')}</td>
-          <td>${esc(r.product_name||'')}</td>
-          <td>${esc(r.spec||'')}</td>
-          <td>${esc(colorDesc)}</td>
-          <td style="text-align:right">${qty.toLocaleString()}</td>
-          <td>${esc(r.unit||'')}</td>
-          <td style="text-align:right">${price?price.toLocaleString()+'円':''}</td>
-          <td style="text-align:right;font-weight:700">${amt?amt.toLocaleString()+'円':''}</td>
+          <td style="font-family:monospace;font-size:8pt;padding:3pt 5pt">${esc(r.product_no||'')}</td>
+          <td style="padding:3pt 5pt">${esc(r.product_name||'')}</td>
+          <td style="padding:3pt 5pt">${esc(r.spec||'')}</td>
+          <td style="padding:3pt 5pt">${esc(colorDesc)}</td>
+          <td style="text-align:right;padding:3pt 5pt">${qty?qty.toLocaleString():''}</td>
+          <td style="padding:3pt 5pt">${esc(r.unit||'')}</td>
+          <td style="text-align:right;padding:3pt 5pt">${price?price.toLocaleString()+'円':''}</td>
+          <td style="text-align:right;font-weight:700;padding:3pt 5pt">${amt?amt.toLocaleString()+'円':''}</td>
         </tr>`);
       }
     });
@@ -2967,90 +2979,134 @@ async function generateMaterialOrderPDF() {
       supplier_name:sup, process_names:'', total_qty:0, total_amount:grandAmt, memo:note
     });
 
-    pages+=`${pageIdx>0?'<div class="page-break"></div>':''}
-    <div class="header">
-      <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. / TEL:075-755-7973</div></div>
-      <div><div class="doc-title">資 材 発 注 書（${esc(orderType)}）</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
-    </div>
-    <!-- 発注先・納期・出荷先 -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd">
-      <div>
-        <div class="sec-title">発注先</div>
-        <div style="font-size:11pt;font-weight:700">${esc(sup)}</div>
+    // 出荷先ブロック（住所は絶対に切れないようword-breakを徹底）
+    const shipBlock = shipName ? `
+      <div style="margin-bottom:8pt;padding:8pt;background:#EEF6FF;border:0.5pt solid #2B5CE6;border-radius:4pt">
+        <div style="font-size:7.5pt;font-weight:700;color:#2B5CE6;margin-bottom:4pt">🚚 出荷先</div>
+        <div style="font-size:10pt;font-weight:700;margin-bottom:3pt;word-break:break-all;white-space:normal;overflow-wrap:anywhere">${esc(shipName)}</div>
+        ${shipZip ?`<div style="font-size:8.5pt;margin-bottom:2pt">〒&thinsp;${esc(shipZip)}</div>`:''}
+        ${shipAddr?`<div style="font-size:8.5pt;line-height:1.6;word-break:break-all;white-space:normal;overflow-wrap:anywhere;margin-bottom:2pt">${esc(shipAddr)}</div>`:''}
+        ${shipTel ?`<div style="font-size:8.5pt">TEL: ${esc(shipTel)}</div>`:''}
+      </div>` : '';
+
+    const htmlContent = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+      <title>${orderNo}</title>
+      <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:Arial,'Hiragino Sans',sans-serif;font-size:9pt;color:#000;background:#fff;padding:12mm 10mm}
+        table{border-collapse:collapse;width:100%}
+        th{background:#1B2A4A;color:#fff;padding:4pt 5pt;text-align:left;font-size:8pt;white-space:nowrap}
+        td{padding:3pt 5pt;border-bottom:0.5pt solid #ddd;vertical-align:top;font-size:8.5pt}
+        .header{display:flex;justify-content:space-between;border-bottom:2pt solid #1B2A4A;padding-bottom:6pt;margin-bottom:10pt}
+        .logo{font-size:16pt;font-weight:700;color:#1B2A4A}.logo span{color:#2B5CE6}
+        .doc-title{font-size:13pt;font-weight:700;text-align:right;color:#1B2A4A}
+        .doc-no{font-size:8pt;color:#888;text-align:right;margin-top:2pt}
+        .sec-title{font-size:7.5pt;font-weight:700;color:#2B5CE6;border-bottom:0.5pt solid #2B5CE6;padding-bottom:2pt;margin:8pt 0 4pt}
+        .total-row td{background:#EEF2FD!important;color:#2B5CE6;font-weight:700}
+        .footer{border-top:0.5pt solid #ddd;padding-top:5pt;margin-top:10pt;display:flex;justify-content:space-between;font-size:7.5pt;color:#888}
+        .sign-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10pt;margin-top:10pt}
+        .sign-box{border-top:0.5pt solid #888;padding-top:3pt;font-size:7.5pt;color:#888;text-align:center;height:28pt}
+      </style>
+    </head><body>
+      <div class="header">
+        <div><div class="logo">RL <span>OMS</span></div><div style="font-size:7pt;color:#888">Raises Lab Co., Ltd. / TEL:075-755-7973</div></div>
+        <div><div class="doc-title">資 材 発 注 書（${esc(orderType)}）</div><div class="doc-no">発注No.: ${esc(orderNo)} / 発注日: ${new Date().toLocaleDateString('ja-JP')}</div></div>
       </div>
-      <div>
-        <div class="sec-title">納期</div>
-        <div style="font-size:13pt;font-weight:700">${esc(delivery)||'未設定'}</div>
+      <!-- 発注先・納期 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8pt;margin-bottom:8pt;padding-bottom:6pt;border-bottom:0.5pt solid #ddd">
+        <div><div class="sec-title">発注先</div><div style="font-size:11pt;font-weight:700">${esc(sup)}</div></div>
+        <div><div class="sec-title">納期</div><div style="font-size:13pt;font-weight:700">${esc(delivery)||'未設定'}</div></div>
       </div>
-    </div>
-    ${shipName?`<div style="margin-bottom:8pt;padding:6pt;background:#EEF2FD;border-radius:4pt;font-size:8.5pt">
-      <div style="font-weight:700;color:#2B5CE6;margin-bottom:4pt">🚚 出荷先</div>
-      <div style="font-weight:700;font-size:10pt;margin-bottom:2pt">${esc(shipName)}</div>
-      ${shipZip?`<div style="word-break:break-all;white-space:normal">〒${esc(shipZip)}</div>`:''}
-      ${shipAddr?`<div style="word-break:break-all;white-space:normal;line-height:1.5">${esc(shipAddr)}</div>`:''}
-      ${shipTel?`<div>TEL: ${esc(shipTel)}</div>`:''}
-    </div>`:''}
-    <!-- 品番情報 -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt 16pt;margin-bottom:8pt;font-size:8.5pt">
-      <div class="info-row"><span class="lbl">品番：</span><span class="val" style="font-weight:700">${esc(p.brand_product_no||'')}</span></div>
-      <div class="info-row"><span class="lbl">品名：</span><span class="val">${esc(p.product_name||'')}</span></div>
-    </div>
-    <div class="sec-title">発注明細</div>
-    <table>
-      <thead><tr>
-        <th style="width:56pt">品番</th><th>品名</th><th style="width:46pt">規格</th>
-        <th style="width:46pt">資材カラー</th>
-        <th style="width:36pt;text-align:right">数量</th><th style="width:20pt">単位</th>
-        <th style="width:50pt;text-align:right">単価</th><th style="width:60pt;text-align:right">金額</th>
-      </tr></thead>
-      <tbody>${detailRows.join('')}</tbody>
-      <tfoot><tr class="total-row">
-        <td colspan="7" style="text-align:right;padding-right:8pt">合計金額</td>
-        <td style="text-align:right;font-size:11pt;font-weight:700">${grandAmt.toLocaleString()}円</td>
-      </tr></tfoot>
-    </table>
-    ${note?`<div style="margin-top:8pt"><div class="sec-title">備考・指示事項</div>
-    <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(note)}</div></div>`:''}
-    <!-- 付記 -->
-    <div style="margin-top:10pt;padding:8pt;border:0.5pt solid #ddd;border-radius:4pt;font-size:8pt;line-height:1.8">
-      ※ 出荷明細を出荷日に必ずFAXまたは担当者にメール連絡をお願い致します。<br>
-      ※ 生地は出荷時に必ず生地の表裏の表記をつけて出荷して下さい。<br>
-      ※ 出荷伝票/請求伝票に必ず本発注書下部の使用品番を明記して下さい。
-    </div>
-    <!-- 使用品番 -->
-    <div style="margin-top:8pt;padding:6pt;background:#F7F6F3;border-radius:4pt;font-size:8pt">
-      使用品番：${esc(p.brand_product_no||'')}　${esc(p.product_name||'')}　${esc(p.year||'')}${esc(p.season||'')}
-    </div>
-    <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
-    <div class="footer"><span>Raises Lab Co., Ltd. / ${esc(orderNo)}</span><span>${pageIdx+1} / ${totalPages}</span></div>`;
-    pageIdx++;
+      ${shipBlock}
+      <!-- 発注明細 -->
+      <div class="sec-title">発注明細</div>
+      <table>
+        <thead><tr>
+          <th style="width:56pt">品番</th><th>品名</th><th style="width:46pt">規格</th>
+          <th style="width:46pt">資材カラー</th>
+          <th style="width:36pt;text-align:right">数量</th><th style="width:20pt">単位</th>
+          <th style="width:50pt;text-align:right">単価</th><th style="width:60pt;text-align:right">金額</th>
+        </tr></thead>
+        <tbody>${detailRows.join('')}</tbody>
+        <tfoot><tr class="total-row">
+          <td colspan="7" style="text-align:right;padding-right:8pt">合計金額</td>
+          <td style="text-align:right;font-size:11pt;font-weight:700">${grandAmt.toLocaleString()}円</td>
+        </tr></tfoot>
+      </table>
+      ${note?`<div style="margin-top:8pt"><div class="sec-title">備考・指示事項</div>
+      <div style="border:0.5pt solid #ddd;border-radius:3pt;padding:6pt;font-size:8.5pt">${esc(note)}</div></div>`:''}
+      <!-- 付記 -->
+      <div style="margin-top:10pt;padding:8pt;border:0.5pt solid #ddd;border-radius:4pt;font-size:8pt;line-height:1.8">
+        ※ 出荷明細を出荷日に必ずFAXまたは担当者にメール連絡をお願い致します。<br>
+        ※ 生地は出荷時に必ず生地の表裏の表記をつけて出荷して下さい。<br>
+        ※ 出荷伝票/請求伝票に必ず本発注書下部の使用品番を明記して下さい。
+      </div>
+      <!-- 使用品番（下部のみ記載）-->
+      <div style="margin-top:8pt;padding:6pt;background:#F7F6F3;border-radius:4pt;font-size:8pt;font-weight:600">
+        使用品番：${esc(p.brand_product_no||'')}　${esc(p.product_name||'')}　${esc(String(p.year||''))}${esc(p.season||'')}
+      </div>
+      <div class="sign-row"><div class="sign-box">確認</div><div class="sign-box">承認</div><div class="sign-box">出力者</div></div>
+      <div class="footer"><span>Raises Lab Co., Ltd. / ${esc(orderNo)}</span><span>1 / ${totalPages}</span></div>
+    </body></html>`;
+
+    // HTMLをBlobでダウンロード（印刷ダイアログなし）
+    const blob = new Blob([htmlContent], {type:'text/html;charset=utf-8'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `${orderNo}.html`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+
+    // 仕入先のメールアドレスを取得
+    const supMaster = _masters.partners.find(pp=>pp.partner_name===sup)||_masters.suppliers.find(pp=>pp.partner_name===sup||pp.supplier_name===sup);
+    const supEmail  = supMaster?.email||supMaster?.mail||'';
+    emailDrafts.push({orderNo, sup, supEmail, orderType, delivery, grandAmt});
   }
 
-  // 先にポップアップを閉じてからDOMに転記
+  // ポップアップを閉じる
   document.getElementById('mat-order-ov')?.remove();
 
-  // 資材シートの納期を転記（ポップアップ閉じた後でもdeliveryMapは残っている）
+  // 納期を資材シートに転記・保存
   _materialRows.forEach((row,idx)=>{
-    const name = row.product_name || getMF(idx,'product_name') || '';
-    const spec  = row.spec        || getMF(idx,'spec')         || '';
-    const key   = name + spec;
+    const key = (row.product_name||getMF(idx,'product_name')||'') + (row.spec||getMF(idx,'spec')||'');
     if(deliveryMap[key]) {
-      // DOMに反映（資材シートが開いていれば）
       const delEl = document.querySelector(`[data-r="${idx}"][data-f="delivery_date"]`);
       if(delEl) delEl.value = deliveryMap[key];
-      // _materialRowsにも保存
       _materialRows[idx].delivery_date = deliveryMap[key];
     }
   });
+  if(Object.keys(deliveryMap).length>0 && _materialRows.length>0) await saveMaterialsData();
 
-  // 納期が転記されたら自動保存
-  const hasDelivery = Object.keys(deliveryMap).length > 0;
-  if(hasDelivery && _materialRows.length > 0) {
-    await saveMaterialsData();
-  }
+  // メール起動（発注先ごと）
+  emailDrafts.forEach(({orderNo, sup, supEmail, orderType, delivery, grandAmt})=>{
+    const subject = encodeURIComponent(`【資材発注】${orderNo} / ${p.brand_product_no||p.style_code}`);
+    const body    = encodeURIComponent(
+`${sup} ご担当者様
 
-  openPrintWindow(pages,'資材発注書_'+p.brand_product_no);
-  toast('資材発注書を発行しました（納期を資材シートに転記・保存済）','success');
+お世話になります。レイズラボ近藤でございます。
+下記の通り資材発注書をお送りいたします。
+
+発注No.: ${orderNo}
+品番: ${p.brand_product_no||p.style_code}
+品名: ${p.product_name||''}
+区分: ${orderType}
+納期: ${delivery||'別途ご連絡'}
+合計金額: ${grandAmt.toLocaleString()}円
+
+発注書はダウンロードファイルをご確認ください。
+ご不明な点がございましたらお気軽にご連絡ください。
+
+よろしくお願いいたします。
+
+レイズラボ株式会社
+近藤 雅俊
+TEL: 075-755-7973`);
+    window.open(`mailto:${supEmail}?subject=${subject}&body=${body}`,'_blank');
+  });
+
+  toast(`資材発注書を発行しました（${emailDrafts.length}件）。メーラーを確認してください。`,'success');
 }
 // ===== マスタ管理 =====
 let _masterTab='supplier';
